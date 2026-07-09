@@ -1,7 +1,12 @@
 # How to Run — Arabic Movie & Show Map
 
-This file is filled in incrementally as each pipeline stage
-(see [arabic-movie-map-project-spec.md](arabic-movie-map-project-spec.md) §4) is built.
+**The live app is TMDB-powered** (see "Frontend" below): search any movie/show,
+the map shows TMDB's similar titles. It queries TMDB live through a serverless
+proxy, so there's no pre-built dataset to generate for it.
+
+The **Elcinema → tagging → similarity** sections below are the original
+Arabic-first offline pipeline. It is **shelved** — kept in the repo, not wired
+to the live app. Skip to "Frontend" for the running product.
 
 ## Scraper
 
@@ -92,39 +97,50 @@ python compute_similarity.py --in ../ai_tagging/output/sample.tagged.json ../ai_
 - Output feeds `docs/index.html` directly — the frontend never recomputes
   similarity at request time.
 
-## Frontend (test page, GitHub Pages)
+## Frontend (TMDB-live, deploys on Vercel)
 
-Live at: https://mohamedhassan268.github.io/movie-map/
+The live app. `index.html` (repo root) is a single-file D3 force-directed
+graph that searches TMDB and shows each title's TMDB "similar/recommended"
+neighbors. It talks to TMDB through `api/tmdb.js`, a serverless proxy that
+injects the TMDB key server-side (so the key is never in the page).
 
-```
-cd docs
-python -m http.server 8000
-# open http://localhost:8000/ in a browser
-```
+### Files
+- `index.html` + `vendor/d3.v7.min.js` — the static frontend (D3 vendored
+  locally, no CDN).
+- `api/tmdb.js` — Vercel serverless function. Whitelists TMDB endpoints
+  (search/genres/details/recommendations/similar) and reads the credential
+  from an env var: `TMDB_READ_TOKEN` (v4 read token, preferred) or
+  `TMDB_API_KEY` (v3 key).
 
-- `docs/index.html` — a single-file D3 force-directed graph (D3 vendored
-  locally in `docs/vendor/`, no CDN dependency). Reads `docs/data.json`
-  (produced by the similarity engine above).
-- Landing screen: an Arabic/English origin filter + search-to-select list —
-  no full map shown until a title is picked, per the spec's "pick a title,
-  see it as center node" interaction.
-- Each title displays in its own origin language automatically (via the
-  `tmdb_original_language` field from TMDB enrichment): Arabic productions
-  show their Arabic name, foreign titles (e.g. Braveheart, present because
-  they screened in Egyptian cinemas) show their English name. No manual
-  language toggle needed.
-- Click any node to re-center the graph on it. "Show all" shows the full
-  graph; "New search" returns to the landing screen.
-- To redeploy after changing `docs/`: commit, push to `master`, GitHub Pages
-  rebuilds automatically (serves from `/docs` on `master` — configured via
-  `gh api repos/Mohamedhassan268/movie-map/pages`).
+### Deploy on Vercel (one-time)
+1. Go to vercel.com, sign in with GitHub, "Add New → Project", import
+   `Mohamedhassan268/movie-map`.
+2. Framework preset: **Other** (it's a static site + an API function; no
+   build step). Leave build/output settings default.
+3. Under **Environment Variables**, add `TMDB_READ_TOKEN` = your TMDB v4 API
+   Read Access Token (or `TMDB_API_KEY` = the v3 key). This is the secret —
+   it lives only in Vercel, never in the repo.
+4. Deploy. Vercel serves `index.html` at `/` and the function at
+   `/api/tmdb`. Pushes to `master` auto-redeploy.
 
-Both scripts take the raw scraper output or the TMDB-enriched version (fall
-back to `tmdb_overview_en`/`tmdb_genres` if Elcinema's `synopsis_ar`/`genres`
-are missing).
+### Local dev
+`vercel dev` (after `npm i -g vercel` and `vercel link`) runs the static site
++ the function together with the env var loaded, at http://localhost:3000.
 
-## Similarity engine
-_TBD once the similarity computation is written._
+### Behaviour
+- Landing: title, tagline, Arabic/English origin filter, one search box —
+  nothing else (no pre-populated list). The filter scopes search to TMDB
+  `original_language` `ar` vs `en`.
+- Type ≥2 chars → live TMDB results dropdown (poster + native-language title +
+  year + movie/series badge). Pick one → the map renders that title centered
+  with its TMDB neighbors.
+- Click a neighbor → re-center on it (live fetch, cached per title). "Back"
+  steps to the previous center; "New search" returns to the landing page.
+- Each title shows in its own origin language (Arabic-origin → Arabic name,
+  foreign → English name), read from TMDB `original_language`.
+
+> The old GitHub Pages demo (`docs/`, the pre-pivot 39-title static version)
+> still exists in the repo for reference but is superseded by this app.
 
 ## Frontend (dev server)
 _TBD once the frontend project is scaffolded._

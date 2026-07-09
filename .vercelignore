@@ -1,0 +1,8 @@
+# Only the frontend (index.html, vendor/) and the api/ function need to deploy.
+# The offline Arabic-first pipeline and old GitHub Pages demo aren't served.
+scraper/
+ai_tagging/
+similarity/
+docs/
+*.md
+mood-tags-vocabulary.md

@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Arabic Movie &amp; Show Map</title>
+<script src="./vendor/d3.v7.min.js"></script>
+<style>
+  :root { --bg: #0d0f14; --panel: #171a22; --border: #2a2f3a; --text: #e8e8ea; --muted: #8b909c; --accent: #3a5a8a; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; overflow: hidden; }
+
+  /* Subtle, non-flashy cinematic wallpaper: deep gradient + faint film-strip motif. */
+  #wallpaper {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background:
+      radial-gradient(1200px 600px at 50% -10%, #1a2030 0%, transparent 60%),
+      linear-gradient(160deg, #0d0f14 0%, #10131a 55%, #0b0d12 100%);
+  }
+  #wallpaper::after {
+    content: ""; position: absolute; inset: 0; opacity: 0.05;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='60' height='40'><rect width='60' height='40' fill='none'/><rect x='4' y='6' width='8' height='6' rx='1' fill='%23ffffff'/><rect x='4' y='28' width='8' height='6' rx='1' fill='%23ffffff'/><rect x='48' y='6' width='8' height='6' rx='1' fill='%23ffffff'/><rect x='48' y='28' width='8' height='6' rx='1' fill='%23ffffff'/></svg>");
+    background-size: 60px 40px;
+  }
+
+  /* Landing */
+  #landing { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 20px; }
+  #landing h1 { margin: 0; font-size: 30px; letter-spacing: 0.3px; text-align: center; }
+  #landing p.sub { margin: 0; color: var(--muted); font-size: 14px; text-align: center; }
+  #origin-filter { display: flex; gap: 8px; margin-top: 4px; }
+  #origin-filter button { background: rgba(255,255,255,0.04); color: var(--muted); border: 1px solid var(--border); padding: 8px 18px; border-radius: 22px; cursor: pointer; font-size: 13px; }
+  #origin-filter button.active { background: var(--accent); color: #fff; border-color: #4a7ac0; }
+  #search-wrap { position: relative; width: min(420px, 90vw); }
+  #search-box { width: 100%; box-sizing: border-box; padding: 12px 16px; border-radius: 10px; border: 1px solid var(--border); background: rgba(20,22,30,0.9); color: var(--text); font-size: 15px; }
+  #search-box:focus { outline: none; border-color: var(--accent); }
+  #search-results { position: absolute; top: calc(100% + 6px); left: 0; right: 0; max-height: 340px; overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; display: none; }
+  #search-results.show { display: block; }
+  #search-results .item { display: flex; gap: 10px; align-items: center; padding: 8px 12px; cursor: pointer; border-bottom: 1px solid #21252e; }
+  #search-results .item:last-child { border-bottom: none; }
+  #search-results .item:hover { background: #202533; }
+  #search-results .item img { width: 34px; height: 51px; object-fit: cover; border-radius: 3px; background: #222; flex: none; }
+  #search-results .item .t { flex: 1; min-width: 0; }
+  #search-results .item .t .name { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #search-results .item .t .sub { font-size: 12px; color: var(--muted); }
+  #search-results .badge { font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; flex: none; }
+  #search-results .msg { padding: 14px; color: var(--muted); font-size: 13px; text-align: center; }
+
+  /* Map */
+  #toolbar { position: absolute; top: 10px; left: 10px; z-index: 10; display: none; gap: 8px; }
+  #toolbar button { background: var(--panel); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  #toolbar button:hover { background: #202533; }
+  #toolbar button:disabled { opacity: 0.4; cursor: default; }
+  #info { position: absolute; bottom: 10px; left: 10px; z-index: 10; max-width: 320px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 14px; display: none; }
+  #info h2 { margin: 0 0 4px; font-size: 16px; }
+  #info .meta { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  #info .tags span { display: inline-block; background: #232733; border-radius: 10px; padding: 2px 8px; margin: 2px; font-size: 11px; }
+  #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); z-index: 5; color: var(--muted); font-size: 14px; display: none; }
+  svg { position: relative; z-index: 1; width: 100vw; height: 100vh; display: block; }
+  text.label { fill: #ddd; font-size: 11px; pointer-events: none; }
+  circle.node { stroke: #000; stroke-width: 1px; cursor: pointer; }
+  circle.node.center { stroke: #fff; stroke-width: 2px; }
+  line.link { stroke: #4a4f5c; stroke-opacity: 0.6; }
+</style>
+</head>
+<body>
+<div id="wallpaper"></div>
+
+<div id="landing">
+  <h1>Arabic Movie &amp; Show Map</h1>
+  <p class="sub">Start exploring similar movies and shows.</p>
+  <div id="origin-filter">
+    <button data-origin="ar" class="active">Arabic movies</button>
+    <button data-origin="en">English movies</button>
+  </div>
+  <div id="search-wrap">
+    <input id="search-box" type="text" placeholder="Search titles..." autocomplete="off" />
+    <div id="search-results"></div>
+  </div>
+</div>
+
+<div id="toolbar">
+  <button id="back" disabled>&larr; Back</button>
+  <button id="new-search">New search</button>
+</div>
+<div id="info"></div>
+<div id="loading">Loading...</div>
+<svg></svg>
+
+<script>
+const IMG_BASE = "https://image.tmdb.org/t/p/w92";
+const GENRE_COLORS = {
+  comedy: "#e0b354", drama: "#5b8fd6", crime: "#c05a5a", action: "#d67b3a",
+  history: "#8b6bb0", war: "#6b6b6b", romance: "#d16a9a", family: "#6bb08a",
+  fantasy: "#7a6bd6", horror: "#8a2b2b", mystery: "#4a6a8a", thriller: "#4a4a8a",
+  documentary: "#6a8a6a", music: "#c98ac9", animation: "#c98ac9",
+  adventure: "#d67b3a", "science fiction": "#5aa0a0", "tv movie": "#6a8a6a",
+  western: "#a08a5a", "action & adventure": "#d67b3a", "sci-fi & fantasy": "#7a6bd6",
+  "war & politics": "#6b6b6b", kids: "#6bb08a", reality: "#8b909c", soap: "#d16a9a",
+};
+
+let originFilter = "ar";
+let genreMap = {};          // id -> name, populated from TMDB genre lists
+let neighborCache = {};     // "type:id" -> neighbor nodes (avoid refetch on recenter)
+let history = [];           // stack of centered items for the Back button
+let svg, simulation;
+
+function api(endpoint, params = {}) {
+  const qs = new URLSearchParams({ endpoint, ...params });
+  return fetch(`/api/tmdb?${qs}`).then(r => r.json());
+}
+
+// --- item helpers (an "item" is a raw TMDB movie/tv object) ---
+function itemType(x) { return x.media_type || (x.title != null ? "movie" : "tv"); }
+function itemId(x) { return `${itemType(x)}:${x.id}`; }
+function itemYear(x) { return (x.release_date || x.first_air_date || "").slice(0, 4); }
+function itemTitleEn(x) { return x.title || x.name || ""; }
+function itemTitleNative(x) { return x.original_title || x.original_name || itemTitleEn(x); }
+function isForeign(x) { return x.original_language && x.original_language !== "ar"; }
+
+// Display language follows the title's own origin: foreign -> English name,
+// Arabic-origin -> its Arabic (original) name.
+function nativeTitle(x) {
+  if (isForeign(x)) return itemTitleEn(x) || itemTitleNative(x) || String(x.id);
+  return itemTitleNative(x) || itemTitleEn(x) || String(x.id);
+}
+
+function genreNames(x) {
+  const ids = x.genre_ids || (x.genres ? x.genres.map(g => g.id) : []);
+  return ids.map(id => genreMap[id]).filter(Boolean);
+}
+
+function colorOf(x) {
+  const g = (genreNames(x)[0] || "").toLowerCase();
+  return GENRE_COLORS[g] || "#888";
+}
+
+function posterUrl(x) { return x.poster_path ? IMG_BASE + x.poster_path : ""; }
+
+// --- info panel ---
+function renderInfo(x, keywords) {
+  const genres = genreNames(x);
+  const kw = keywords || [];
+  document.getElementById("info").style.display = "block";
+  document.getElementById("info").innerHTML = `
+    <h2>${nativeTitle(x)}</h2>
+    <div class="meta">${itemYear(x) || "?"} &middot; ${itemType(x) === "tv" ? "series" : "movie"} &middot; ${genres.join(", ") || "no genre data"}</div>
+    <div class="tags">${kw.slice(0, 6).map(t => `<span>${t}</span>`).join("")}</div>
+  `;
+}
+
+// --- graph drawing (backend-agnostic) ---
+function draw(nodes, links, centerId) {
+  svg.selectAll("*").remove();
+  const width = window.innerWidth, height = window.innerHeight;
+
+  simulation = d3.forceSimulation(nodes)
+    .force("link", d3.forceLink(links).id(d => d._id).distance(130).strength(0.5))
+    .force("charge", d3.forceManyBody().strength(-400))
+    .force("center", d3.forceCenter(width / 2, height / 2))
+    .force("collide", d3.forceCollide(30));
+
+  const link = svg.append("g").selectAll("line").data(links).join("line").attr("class", "link");
+
+  const node = svg.append("g").selectAll("circle").data(nodes).join("circle")
+    .attr("class", d => "node" + (d._id === centerId ? " center" : ""))
+    .attr("r", d => d._id === centerId ? 20 : 12)
+    .attr("fill", colorOf)
+    .on("click", (event, d) => { if (d._id !== centerId) centerOn(d, true); })
+    .on("mouseover", (event, d) => renderInfo(d))
+    .call(drag());
+
+  const label = svg.append("g").selectAll("text").data(nodes).join("text")
+    .attr("class", "label")
+    .attr("dy", d => d._id === centerId ? 32 : 22)
+    .attr("text-anchor", "middle")
+    .text(nativeTitle);
+
+  simulation.on("tick", () => {
+    link.attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+        .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+    node.attr("cx", d => d.x).attr("cy", d => d.y);
+    label.attr("x", d => d.x).attr("y", d => d.y);
+  });
+}
+
+function drag() {
+  return d3.drag()
+    .on("start", (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+    .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y; })
+    .on("end", (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; });
+}
+
+// --- data fetching ---
+async function fetchNeighbors(item) {
+  const key = itemId(item);
+  if (neighborCache[key]) return neighborCache[key];
+  const type = itemType(item);
+  let results = [];
+  try {
+    const rec = await api(`${type}/${item.id}/recommendations`);
+    results = rec.results || [];
+    if (results.length < 6) {
+      const sim = await api(`${type}/${item.id}/similar`);
+      results = results.concat(sim.results || []);
+    }
+  } catch (e) { results = []; }
+  // Dedupe by id, drop the center itself, cap at 12, tag media_type.
+  const seen = new Set([item.id]);
+  const neighbors = [];
+  for (const r of results) {
+    if (seen.has(r.id)) continue;
+    seen.add(r.id);
+    r.media_type = r.media_type || type;
+    neighbors.push(r);
+    if (neighbors.length >= 12) break;
+  }
+  neighborCache[key] = neighbors;
+  return neighbors;
+}
+
+async function fetchKeywords(item) {
+  try {
+    const type = itemType(item);
+    const d = await api(`${type}/${item.id}`, { append_to_response: "keywords" });
+    const kw = (d.keywords && (d.keywords.keywords || d.keywords.results)) || [];
+    return kw.map(k => k.name);
+  } catch (e) { return []; }
+}
+
+async function centerOn(item, pushHistory) {
+  document.getElementById("loading").style.display = "block";
+  if (pushHistory) history.push(item);
+  const centerId = itemId(item);
+  const [neighbors, keywords] = await Promise.all([fetchNeighbors(item), fetchKeywords(item)]);
+  const nodes = [{ ...item, _id: centerId }, ...neighbors.map(n => ({ ...n, _id: itemId(n) }))];
+  const links = nodes.slice(1).map(n => ({ source: centerId, target: n._id }));
+  draw(nodes, links, centerId);
+  renderInfo(item, keywords);
+  document.getElementById("loading").style.display = "none";
+  document.getElementById("back").disabled = history.length <= 1;
+}
+
+// --- landing / search ---
+function showMap(item) {
+  document.getElementById("landing").style.display = "none";
+  document.getElementById("toolbar").style.display = "flex";
+  history = [];
+  centerOn(item, true);
+}
+
+function renderResults(items) {
+  const box = document.getElementById("search-results");
+  if (!items) { box.classList.remove("show"); box.innerHTML = ""; return; }
+  box.classList.add("show");
+  if (items.length === 0) { box.innerHTML = `<div class="msg">No matches in TMDB.</div>`; return; }
+  box.innerHTML = items.map((x, i) => `
+    <div class="item" data-i="${i}">
+      ${posterUrl(x) ? `<img src="${posterUrl(x)}" alt="" />` : `<img alt="" />`}
+      <div class="t">
+        <div class="name">${nativeTitle(x)}</div>
+        <div class="sub">${itemYear(x) || ""}</div>
+      </div>
+      <div class="badge">${itemType(x) === "tv" ? "series" : "movie"}</div>
+    </div>`).join("");
+  box.querySelectorAll(".item").forEach(el => {
+    el.addEventListener("click", () => showMap(items[+el.dataset.i]));
+  });
+}
+
+let searchSeq = 0;
+async function runSearch(query) {
+  const q = query.trim();
+  if (q.length < 2) { renderResults(null); return; }
+  const seq = ++searchSeq;
+  const data = await api("search/multi", { query: q });
+  if (seq !== searchSeq) return; // a newer keystroke superseded this one
+  const items = (data.results || [])
+    .filter(x => (x.media_type === "movie" || x.media_type === "tv"))
+    .filter(x => originFilter === "en" ? isForeign(x) : !isForeign(x))
+    .slice(0, 20);
+  renderResults(items);
+}
+
+function debounce(fn, ms) {
+  let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+}
+
+// --- wiring ---
+document.getElementById("new-search").addEventListener("click", () => {
+  document.getElementById("toolbar").style.display = "none";
+  document.getElementById("info").style.display = "none";
+  document.getElementById("landing").style.display = "flex";
+  svg.selectAll("*").remove();
+  const box = document.getElementById("search-box");
+  box.value = ""; renderResults(null); box.focus();
+});
+
+document.getElementById("back").addEventListener("click", () => {
+  if (history.length <= 1) return;
+  history.pop();
+  centerOn(history[history.length - 1], false);
+});
+
+document.querySelectorAll("#origin-filter button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("#origin-filter button").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    originFilter = btn.dataset.origin;
+    runSearch(document.getElementById("search-box").value);
+  });
+});
+
+document.getElementById("search-box").addEventListener("input", debounce(e => runSearch(e.target.value), 300));
+
+svg = d3.select("svg");
+// Load the genre id->name maps once so nodes can show/colour by genre.
+Promise.all([api("genre/movie/list"), api("genre/tv/list")]).then(([m, t]) => {
+  [...(m.genres || []), ...(t.genres || [])].forEach(g => { genreMap[g.id] = g.name; });
+});
+</script>
+</body>
+</html>

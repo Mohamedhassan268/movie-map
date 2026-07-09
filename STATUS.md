@@ -3,10 +3,34 @@
 Last updated: 2026-07-09
 
 ## Current stage
-Full pipeline (scraper → TMDB enrichment → mood tagging → similarity engine
-→ interactive graph frontend) validated end-to-end on the 39-title sample
-and live on GitHub Pages. Next: human review flow, then data schema lock and
-scaling up the scraper.
+**Pivoted the live app to TMDB-live** (Mohamed's call): the map now searches
+TMDB directly and shows each title's TMDB "similar/recommended" neighbors, so
+you can look up *any* movie/show in TMDB — not just the 39 we scraped. The
+Elcinema → tagging → similarity pipeline is **shelved** (kept in the repo, no
+longer wired to the frontend). Next: deploy to Vercel (needs Mohamed to
+connect the repo + set the TMDB key env var).
+
+- **Frontend** (`index.html` at repo root, D3 graph): landing page = title,
+  tagline, Arabic/English origin filter, one search box (no pre-populated
+  list, per feedback). Type → live TMDB results dropdown → pick one → map
+  centered on it with TMDB neighbors → click a neighbor to re-center (live
+  fetch, cached), "Back"/"New search" to navigate. Subtle film-strip
+  wallpaper. Per-title native-language display (Arabic-origin → Arabic name,
+  foreign → English name) from TMDB `original_language`.
+- **Serverless proxy** (`api/tmdb.js`, Vercel function): whitelists TMDB
+  endpoints and injects the key from an env var (`TMDB_READ_TOKEN` /
+  `TMDB_API_KEY`) so the key is never exposed in the page — the reason
+  hosting moves from GitHub Pages (static, can't hide secrets) to Vercel.
+- Verified end-to-end with a local proxy stand-in + Playwright: landing
+  resting state clean, English/Arabic filters work, real TMDB search (e.g.
+  Braveheart → 10 results → map of similar war/historical films), recenter,
+  no-match handling, zero console errors — screenshots confirmed visually.
+
+### Prior stage (now shelved)
+Full offline pipeline (scraper → TMDB enrichment → mood tagging → similarity
+engine → static graph) was validated on the 39-title sample and is live on
+the old GitHub Pages demo. Superseded by the TMDB-live app above but kept for
+reference / possible Arabic-first revival.
 
 - **Similarity engine** (`similarity/compute_similarity.py`): weighted score
   per spec (genre 35% / mood tags 45% / era 20%), keeps each title's top-8
@@ -81,10 +105,10 @@ scaling up the scraper.
 - [ ] Data schema + storage — lock JSON shape
 - [x] AI tagging (rule-based, free) — validated on both samples
 - [ ] Human review flow — not yet built
-- [x] Similarity engine — validated on the small sample
-- [x] Frontend graph prototype — wired to small sample dataset, live on GitHub Pages
-- [ ] Scale scraper to full 500–2000+ titles
-- [ ] Deploy (proper — current GitHub Pages is a test deployment, not final hosting)
+- [x] Similarity engine — validated on the small sample (shelved with the pipeline)
+- [x] Frontend graph prototype — now TMDB-live (search any title), tested locally
+- [ ] Deploy TMDB-live app to Vercel (needs Mohamed: connect repo + set TMDB key env var)
+- [ ] (Shelved) Scale Elcinema scraper to 500–2000+ titles — only if reviving the offline pipeline
 
 ## Open items to decide later
 - Mood/theme tag vocabulary — draft exists ([mood-tags-vocabulary.md](mood-tags-vocabulary.md)), needs review/edit.
