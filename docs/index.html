@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Arabic Movie Map (test)</title>
+<script src="./vendor/d3.v7.min.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; color: #eee; font-family: system-ui, sans-serif; overflow: hidden; }
+  #toolbar { position: absolute; top: 10px; left: 10px; z-index: 10; display: flex; gap: 8px; align-items: center; }
+  #toolbar button { background: #222; color: #eee; border: 1px solid #444; padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+  #toolbar button:hover { background: #333; }
+  #info { position: absolute; bottom: 10px; left: 10px; z-index: 10; max-width: 320px; background: #1c1c1c; border: 1px solid #333; border-radius: 8px; padding: 10px 14px; font-size: 14px; }
+  #info h2 { margin: 0 0 4px; font-size: 16px; }
+  #info .meta { color: #999; font-size: 12px; margin-bottom: 6px; }
+  #info .tags span { display: inline-block; background: #2a2a2a; border-radius: 10px; padding: 2px 8px; margin: 2px; font-size: 11px; }
+  svg { width: 100vw; height: 100vh; display: block; }
+  text.label { fill: #ddd; font-size: 11px; pointer-events: none; }
+  circle.node { stroke: #000; stroke-width: 1px; cursor: pointer; }
+  circle.node.center { stroke: #fff; stroke-width: 2px; }
+  line.link { stroke: #555; stroke-opacity: 0.6; }
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <button id="reset">Show all</button>
+  <button id="lang">AR / EN</button>
+</div>
+<div id="info"></div>
+<svg></svg>
+<script>
+const GENRE_COLORS = {
+  comedy: "#e0b354", drama: "#5b8fd6", crime: "#c05a5a", action: "#d67b3a",
+  history: "#8b6bb0", war: "#6b6b6b", romance: "#d16a9a", family: "#6bb08a",
+  fantasy: "#7a6bd6", horror: "#8a2b2b", mystery: "#4a6a8a", thriller: "#4a4a8a",
+  biography: "#a08a5a", musical: "#c98ac9", documentary: "#6a8a6a",
+};
+
+let lang = "en";
+let allData = [];
+let byId = {};
+let svg, simulation;
+
+function titleOf(d) {
+  return (lang === "en" ? d.title_en : d.title_ar) || d.title_ar || d.title_en || d.id;
+}
+
+function colorOf(d) {
+  const g = (d.genres && d.genres[0]) || "";
+  return GENRE_COLORS[g.toLowerCase()] || "#888";
+}
+
+function renderInfo(d) {
+  const tags = (d.mood_tags && d.mood_tags.ai_suggested) || [];
+  document.getElementById("info").innerHTML = `
+    <h2>${titleOf(d)}</h2>
+    <div class="meta">${d.year || "?"} &middot; ${(d.genres || []).join(", ") || "no genre data"}</div>
+    <div class="tags">${tags.map(t => `<span>${t}</span>`).join("") || "<span>no mood tags</span>"}</div>
+  `;
+}
+
+function buildGraph(centerId) {
+  const center = byId[centerId];
+  const neighborIds = (center.neighbors || []).map(n => n.id);
+  const nodeIds = new Set([centerId, ...neighborIds]);
+  const nodes = [...nodeIds].map(id => ({ ...byId[id] }));
+  const links = neighborIds.map(id => ({ source: centerId, target: id }));
+  return { nodes, links };
+}
+
+function buildFullGraph() {
+  const nodes = allData.map(d => ({ ...d }));
+  const links = [];
+  const seen = new Set();
+  allData.forEach(d => {
+    (d.neighbors || []).forEach(n => {
+      const key = [d.id, n.id].sort().join("|");
+      if (!seen.has(key)) {
+        seen.add(key);
+        links.push({ source: d.id, target: n.id });
+      }
+    });
+  });
+  return { nodes, links };
+}
+
+function draw({ nodes, links }, centerId) {
+  svg.selectAll("*").remove();
+  const width = window.innerWidth, height = window.innerHeight;
+
+  simulation = d3.forceSimulation(nodes)
+    .force("link", d3.forceLink(links).id(d => d.id).distance(centerId ? 130 : 90).strength(0.5))
+    .force("charge", d3.forceManyBody().strength(centerId ? -400 : -120))
+    .force("center", d3.forceCenter(width / 2, height / 2))
+    .force("collide", d3.forceCollide(28));
+
+  const link = svg.append("g").selectAll("line")
+    .data(links).join("line").attr("class", "link");
+
+  const node = svg.append("g").selectAll("circle")
+    .data(nodes).join("circle")
+    .attr("class", d => "node" + (d.id === centerId ? " center" : ""))
+    .attr("r", d => d.id === centerId ? 20 : 12)
+    .attr("fill", colorOf)
+    .on("click", (event, d) => {
+      renderInfo(d);
+      draw(buildGraph(d.id), d.id);
+    })
+    .on("mouseover", (event, d) => renderInfo(d))
+    .call(drag(simulation));
+
+  const label = svg.append("g").selectAll("text")
+    .data(nodes).join("text")
+    .attr("class", "label")
+    .attr("dy", d => (d.id === centerId ? 32 : 22))
+    .attr("text-anchor", "middle")
+    .text(titleOf);
+
+  simulation.on("tick", () => {
+    link
+      .attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+      .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+    node.attr("cx", d => d.x).attr("cy", d => d.y);
+    label.attr("x", d => d.x).attr("y", d => d.y);
+  });
+
+  if (centerId) renderInfo(byId[centerId]);
+}
+
+function drag(sim) {
+  function started(event, d) {
+    if (!event.active) sim.alphaTarget(0.3).restart();
+    d.fx = d.x; d.fy = d.y;
+  }
+  function dragged(event, d) { d.fx = event.x; d.fy = event.y; }
+  function ended(event, d) {
+    if (!event.active) sim.alphaTarget(0);
+    d.fx = null; d.fy = null;
+  }
+  return d3.drag().on("start", started).on("drag", dragged).on("end", ended);
+}
+
+document.getElementById("reset").addEventListener("click", () => draw(buildFullGraph(), null));
+document.getElementById("lang").addEventListener("click", () => {
+  lang = lang === "en" ? "ar" : "en";
+  svg.selectAll("text.label").text(titleOf);
+});
+
+svg = d3.select("svg");
+fetch("./data.json")
+  .then(r => r.json())
+  .then(data => {
+    allData = data;
+    byId = Object.fromEntries(data.map(d => [d.id, d]));
+    draw(buildFullGraph(), null);
+  });
+</script>
+</body>
+</html>
