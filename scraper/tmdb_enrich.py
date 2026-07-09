@@ -23,6 +23,10 @@ import truststore
 
 truststore.inject_into_ssl()
 
+# Windows consoles default to cp1252, which can't print Arabic titles.
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
+
 TMDB_BASE = "https://api.themoviedb.org/3"
 DELAY_SECONDS = 0.3
 
