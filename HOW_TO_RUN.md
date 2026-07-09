@@ -77,6 +77,48 @@ python tag_moods.py --in ../scraper/output/sample.tmdb.json --out output/sample.
 - Same input/output shape as the rule-based tagger — writes
   `mood_tags.ai_suggested`; `approved` stays empty until human review.
 
+## Similarity engine
+
+```
+cd similarity
+python compute_similarity.py --in ../ai_tagging/output/sample.tagged.json ../ai_tagging/output/1995_sample.tagged.json --out ../docs/data.json --top-n 8
+```
+
+- No API key, no cost — pure computation over the tagged records.
+- Weighted score per the spec's starting weights (genre overlap 35%, mood-tag
+  overlap 45%, era proximity 20%, all Jaccard-based) between every pair of
+  titles; keeps each title's top `--top-n` neighbors.
+- `--in` takes one or more tagged JSON files and merges them (dedup by `id`).
+- Output feeds `docs/index.html` directly — the frontend never recomputes
+  similarity at request time.
+
+## Frontend (test page, GitHub Pages)
+
+Live at: https://mohamedhassan268.github.io/movie-map/
+
+```
+cd docs
+python -m http.server 8000
+# open http://localhost:8000/ in a browser
+```
+
+- `docs/index.html` — a single-file D3 force-directed graph (D3 vendored
+  locally in `docs/vendor/`, no CDN dependency). Reads `docs/data.json`
+  (produced by the similarity engine above).
+- Landing screen: an Arabic/English origin filter + search-to-select list —
+  no full map shown until a title is picked, per the spec's "pick a title,
+  see it as center node" interaction.
+- Each title displays in its own origin language automatically (via the
+  `tmdb_original_language` field from TMDB enrichment): Arabic productions
+  show their Arabic name, foreign titles (e.g. Braveheart, present because
+  they screened in Egyptian cinemas) show their English name. No manual
+  language toggle needed.
+- Click any node to re-center the graph on it. "Show all" shows the full
+  graph; "New search" returns to the landing screen.
+- To redeploy after changing `docs/`: commit, push to `master`, GitHub Pages
+  rebuilds automatically (serves from `/docs` on `master` — configured via
+  `gh api repos/Mohamedhassan268/movie-map/pages`).
+
 Both scripts take the raw scraper output or the TMDB-enriched version (fall
 back to `tmdb_overview_en`/`tmdb_genres` if Elcinema's `synopsis_ar`/`genres`
 are missing).

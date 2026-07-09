@@ -88,6 +88,7 @@ def enrich_record(session, api_key, record):
         record.setdefault("tmdb_genres", None)
         record.setdefault("tmdb_keywords", None)
         record.setdefault("tmdb_overview_en", None)
+        record.setdefault("tmdb_original_language", None)
         return record
 
     details = fetch_details(session, api_key, media_type, match["id"])
@@ -100,6 +101,7 @@ def enrich_record(session, api_key, record):
     record["tmdb_genres"] = [g["name"] for g in details.get("genres", [])] or None
     record["tmdb_keywords"] = keywords or None
     record["tmdb_overview_en"] = details.get("overview") or None
+    record["tmdb_original_language"] = details.get("original_language") or None
     return record
 
 

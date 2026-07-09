@@ -18,12 +18,37 @@
   circle.node { stroke: #000; stroke-width: 1px; cursor: pointer; }
   circle.node.center { stroke: #fff; stroke-width: 2px; }
   line.link { stroke: #555; stroke-opacity: 0.6; }
+
+  #landing { position: fixed; inset: 0; z-index: 20; background: #111; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; }
+  #landing h1 { margin: 0; font-size: 22px; }
+  #landing p.sub { margin: 0; color: #999; font-size: 13px; }
+  #origin-filter { display: flex; gap: 8px; }
+  #origin-filter button { background: #222; color: #999; border: 1px solid #444; padding: 8px 16px; border-radius: 20px; cursor: pointer; font-size: 13px; }
+  #origin-filter button.active { background: #3a5a8a; color: #fff; border-color: #4a7ac0; }
+  #search-box { width: 340px; padding: 10px 14px; border-radius: 8px; border: 1px solid #444; background: #1c1c1c; color: #eee; font-size: 14px; }
+  #search-results { width: 340px; max-height: 320px; overflow-y: auto; border: 1px solid #333; border-radius: 8px; background: #1a1a1a; }
+  #search-results .item { padding: 10px 14px; cursor: pointer; border-bottom: 1px solid #262626; display: flex; justify-content: space-between; }
+  #search-results .item:last-child { border-bottom: none; }
+  #search-results .item:hover { background: #262626; }
+  #search-results .item .year { color: #777; font-size: 12px; }
+  #search-results .empty { padding: 14px; color: #777; font-size: 13px; text-align: center; }
 </style>
 </head>
 <body>
-<div id="toolbar">
+<div id="landing">
+  <h1>Arabic Movie &amp; Show Map</h1>
+  <p class="sub">Pick a title to start exploring similar movies and shows.</p>
+  <div id="origin-filter">
+    <button data-origin="ar" class="active">Arabic movies</button>
+    <button data-origin="en">English movies</button>
+  </div>
+  <input id="search-box" type="text" placeholder="Search titles..." autocomplete="off" />
+  <div id="search-results"></div>
+</div>
+
+<div id="toolbar" style="display:none;">
   <button id="reset">Show all</button>
-  <button id="lang">AR / EN</button>
+  <button id="new-search">New search</button>
 </div>
 <div id="info"></div>
 <svg></svg>
@@ -35,13 +60,21 @@ const GENRE_COLORS = {
   biography: "#a08a5a", musical: "#c98ac9", documentary: "#6a8a6a",
 };
 
-let lang = "en";
 let allData = [];
 let byId = {};
 let svg, simulation;
+let originFilter = "ar";
 
-function titleOf(d) {
-  return (lang === "en" ? d.title_en : d.title_ar) || d.title_ar || d.title_en || d.id;
+// A title's own origin decides its display language: non-Arabic TMDB
+// original_language (foreign films screened in Egypt) -> English name;
+// Arabic-origin or no TMDB match (most of the catalog) -> Arabic name.
+function isForeignOrigin(d) {
+  return !!(d.tmdb_original_language && d.tmdb_original_language !== "ar");
+}
+
+function nativeTitle(d) {
+  if (isForeignOrigin(d)) return d.title_en || d.title_ar || d.id;
+  return d.title_ar || d.title_en || d.id;
 }
 
 function colorOf(d) {
@@ -52,7 +85,7 @@ function colorOf(d) {
 function renderInfo(d) {
   const tags = (d.mood_tags && d.mood_tags.ai_suggested) || [];
   document.getElementById("info").innerHTML = `
-    <h2>${titleOf(d)}</h2>
+    <h2>${nativeTitle(d)}</h2>
     <div class="meta">${d.year || "?"} &middot; ${(d.genres || []).join(", ") || "no genre data"}</div>
     <div class="tags">${tags.map(t => `<span>${t}</span>`).join("") || "<span>no mood tags</span>"}</div>
   `;
@@ -113,7 +146,7 @@ function draw({ nodes, links }, centerId) {
     .attr("class", "label")
     .attr("dy", d => (d.id === centerId ? 32 : 22))
     .attr("text-anchor", "middle")
-    .text(titleOf);
+    .text(nativeTitle);
 
   simulation.on("tick", () => {
     link
@@ -139,11 +172,57 @@ function drag(sim) {
   return d3.drag().on("start", started).on("drag", dragged).on("end", ended);
 }
 
+function filteredByOrigin() {
+  return allData.filter(d => originFilter === "en" ? isForeignOrigin(d) : !isForeignOrigin(d));
+}
+
+function renderSearchResults(query) {
+  const pool = filteredByOrigin();
+  const q = query.trim().toLowerCase();
+  const matches = q
+    ? pool.filter(d => nativeTitle(d).toLowerCase().includes(q) ||
+                        (d.title_en || "").toLowerCase().includes(q) ||
+                        (d.title_ar || "").includes(query.trim()))
+    : pool;
+
+  const container = document.getElementById("search-results");
+  if (matches.length === 0) {
+    container.innerHTML = `<div class="empty">No titles found.</div>`;
+    return;
+  }
+  container.innerHTML = matches
+    .slice(0, 30)
+    .map(d => `<div class="item" data-id="${d.id}"><span>${nativeTitle(d)}</span><span class="year">${d.year || ""}</span></div>`)
+    .join("");
+  container.querySelectorAll(".item").forEach(el => {
+    el.addEventListener("click", () => selectTitle(el.dataset.id));
+  });
+}
+
+function selectTitle(id) {
+  document.getElementById("landing").style.display = "none";
+  document.getElementById("toolbar").style.display = "flex";
+  draw(buildGraph(id), id);
+}
+
 document.getElementById("reset").addEventListener("click", () => draw(buildFullGraph(), null));
-document.getElementById("lang").addEventListener("click", () => {
-  lang = lang === "en" ? "ar" : "en";
-  svg.selectAll("text.label").text(titleOf);
+document.getElementById("new-search").addEventListener("click", () => {
+  document.getElementById("toolbar").style.display = "none";
+  document.getElementById("landing").style.display = "flex";
+  document.getElementById("search-box").value = "";
+  renderSearchResults("");
 });
+
+document.querySelectorAll("#origin-filter button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("#origin-filter button").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    originFilter = btn.dataset.origin;
+    renderSearchResults(document.getElementById("search-box").value);
+  });
+});
+
+document.getElementById("search-box").addEventListener("input", (e) => renderSearchResults(e.target.value));
 
 svg = d3.select("svg");
 fetch("./data.json")
@@ -151,7 +230,7 @@ fetch("./data.json")
   .then(data => {
     allData = data;
     byId = Object.fromEntries(data.map(d => [d.id, d]));
-    draw(buildFullGraph(), null);
+    renderSearchResults("");
   });
 </script>
 </body>

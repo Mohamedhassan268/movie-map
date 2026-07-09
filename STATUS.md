@@ -3,8 +3,28 @@
 Last updated: 2026-07-09
 
 ## Current stage
-Scraper, TMDB enrichment, and (free, rule-based) mood tagging all validated
-end-to-end on both samples. Next: human review flow, then data schema lock.
+Full pipeline (scraper → TMDB enrichment → mood tagging → similarity engine
+→ interactive graph frontend) validated end-to-end on the 39-title sample
+and live on GitHub Pages. Next: human review flow, then data schema lock and
+scaling up the scraper.
+
+- **Similarity engine** (`similarity/compute_similarity.py`): weighted score
+  per spec (genre 35% / mood tags 45% / era 20%), keeps each title's top-8
+  neighbors. Validated the ranking makes sense (same-genre/same-era titles
+  cluster; cross-era pairs score low).
+- **Frontend test page** (`docs/index.html`, D3 force-directed graph, live at
+  [mohamedhassan268.github.io/movie-map](https://mohamedhassan268.github.io/movie-map/)):
+  landing screen with an Arabic/English origin filter + search-to-select
+  (no full map dumped on load — matches the spec's "pick a title" flow),
+  click a node to re-center on it, "Show all" / "New search" to reset.
+  Titles display in their own origin language automatically (Arabic
+  productions in Arabic script, foreign titles like Braveheart in English)
+  via a new `tmdb_original_language` field, rather than one global toggle —
+  per Mohamed's feedback that mixed-language display is the right behavior
+  for the target audience. D3 is vendored locally (no CDN dependency).
+  Verified with a headless-browser (Playwright) test: landing/filter/search/
+  select/reset all work, correct native-language labels, zero console
+  errors — see screenshots taken during that session.
 
 - Mood/theme vocabulary approved by Mohamed:
   [mood-tags-vocabulary.md](mood-tags-vocabulary.md) (37 tags).
@@ -61,10 +81,10 @@ end-to-end on both samples. Next: human review flow, then data schema lock.
 - [ ] Data schema + storage — lock JSON shape
 - [x] AI tagging (rule-based, free) — validated on both samples
 - [ ] Human review flow — not yet built
-- [ ] Similarity engine — validate weighting on the small sample
-- [ ] Frontend graph prototype — wire to small sample dataset
+- [x] Similarity engine — validated on the small sample
+- [x] Frontend graph prototype — wired to small sample dataset, live on GitHub Pages
 - [ ] Scale scraper to full 500–2000+ titles
-- [ ] Deploy
+- [ ] Deploy (proper — current GitHub Pages is a test deployment, not final hosting)
 
 ## Open items to decide later
 - Mood/theme tag vocabulary — draft exists ([mood-tags-vocabulary.md](mood-tags-vocabulary.md)), needs review/edit.
