@@ -47,7 +47,7 @@
 </div>
 
 <div id="toolbar" style="display:none;">
-  <button id="reset">Show all</button>
+  <button id="reset">Overview</button>
   <button id="new-search">New search</button>
 </div>
 <div id="info"></div>
@@ -100,12 +100,20 @@ function buildGraph(centerId) {
   return { nodes, links };
 }
 
+// Overview of the current origin's catalog, capped so we don't try to
+// force-layout thousands of nodes at once — the full catalog is ~4.5k titles,
+// and rendering them all would freeze the browser. Shows up to OVERVIEW_MAX
+// titles and only the links among them.
+const OVERVIEW_MAX = 250;
 function buildFullGraph() {
-  const nodes = allData.map(d => ({ ...d }));
+  const pool = filteredByOrigin().slice(0, OVERVIEW_MAX);
+  const poolIds = new Set(pool.map(d => d.id));
+  const nodes = pool.map(d => ({ ...d }));
   const links = [];
   const seen = new Set();
-  allData.forEach(d => {
+  pool.forEach(d => {
     (d.neighbors || []).forEach(n => {
+      if (!poolIds.has(n.id)) return;
       const key = [d.id, n.id].sort().join("|");
       if (!seen.has(key)) {
         seen.add(key);
