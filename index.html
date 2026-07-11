@@ -103,6 +103,11 @@ let neighborCache = {};     // "type:id" -> neighbor nodes (avoid refetch on rec
 let history = [];           // stack of centered items for the Back button
 let svg, simulation;
 
+// Curated catalog (docs/data.json): our ~4.5k Egyptian titles, searched first.
+let catalog = [];           // adapted TMDB-shaped items
+let catalogById = {};       // string tmdb_id -> raw catalog record (for neighbors)
+let catalogReady = false;
+
 function api(endpoint, params = {}) {
   const qs = new URLSearchParams({ endpoint, ...params });
   return fetch(`/api/tmdb?${qs}`).then(r => r.json());
@@ -124,6 +129,7 @@ function nativeTitle(x) {
 }
 
 function genreNames(x) {
+  if (x._genres) return x._genres;   // catalog items carry genre names directly
   const ids = x.genre_ids || (x.genres ? x.genres.map(g => g.id) : []);
   return ids.map(id => genreMap[id]).filter(Boolean);
 }
@@ -189,8 +195,46 @@ function drag() {
     .on("end", (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; });
 }
 
+// --- curated catalog (searched first; TMDB is the fallback) ---
+const CATALOG_IMG = "https://image.tmdb.org/t/p/w500";
+// Adapt a docs/data.json record into the same "item" shape the graph uses,
+// keeping the raw record on _catalog so neighbours/tags come from our data.
+function catalogToItem(rec) {
+  return {
+    id: rec.tmdb_id,
+    media_type: "movie",
+    title: rec.title_en || "",
+    original_title: rec.title_ar || "",
+    original_language: rec.tmdb_original_language || "ar",
+    _genres: rec.genres || [],
+    poster_path: rec.poster_url ? rec.poster_url.replace(CATALOG_IMG, "") : null,
+    release_date: rec.year ? `${rec.year}-01-01` : "",
+    _catalog: rec,
+  };
+}
+function searchCatalog(q) {
+  if (!catalogReady) return [];
+  const ql = q.toLowerCase();
+  const pool = catalog.filter(x => originFilter === "en" ? isForeign(x) : !isForeign(x));
+  return pool.filter(x =>
+    (x.title || "").toLowerCase().includes(ql) ||
+    (x.original_title || "").includes(q)
+  ).slice(0, 10);
+}
+function catalogNeighbors(rec) {
+  return (rec.neighbors || [])
+    .map(n => catalogById[n.id])
+    .filter(Boolean)
+    .slice(0, 12)
+    .map(catalogToItem);
+}
+
 // --- data fetching ---
 async function fetchNeighbors(item) {
+  // Curated title -> curated neighbours (also catch a TMDB search hit that
+  // happens to be in our catalog, so it gets the mood-tag graph too).
+  const rec = item._catalog || (itemType(item) === "movie" && catalogById[String(item.id)]);
+  if (rec) return catalogNeighbors(rec);
   const key = itemId(item);
   if (neighborCache[key]) return neighborCache[key];
   const type = itemType(item);
@@ -218,6 +262,8 @@ async function fetchNeighbors(item) {
 }
 
 async function fetchKeywords(item) {
+  const rec = item._catalog || (itemType(item) === "movie" && catalogById[String(item.id)]);
+  if (rec) return (rec.mood_tags && rec.mood_tags.ai_suggested) || [];
   try {
     const type = itemType(item);
     const d = await api(`${type}/${item.id}`, { append_to_response: "keywords" });
@@ -251,7 +297,7 @@ function renderResults(items) {
   const box = document.getElementById("search-results");
   if (!items) { box.classList.remove("show"); box.innerHTML = ""; return; }
   box.classList.add("show");
-  if (items.length === 0) { box.innerHTML = `<div class="msg">No matches in TMDB.</div>`; return; }
+  if (items.length === 0) { box.innerHTML = `<div class="msg">No matches.</div>`; return; }
   box.innerHTML = items.map((x, i) => `
     <div class="item" data-i="${i}">
       ${posterUrl(x) ? `<img src="${posterUrl(x)}" alt="" />` : `<img alt="" />`}
@@ -259,6 +305,7 @@ function renderResults(items) {
         <div class="name">${nativeTitle(x)}</div>
         <div class="sub">${itemYear(x) || ""}</div>
       </div>
+      ${x._catalog ? `<div class="badge" style="border-color:#4a7ac0;color:#8fb4e8">catalog</div>` : ``}
       <div class="badge">${itemType(x) === "tv" ? "series" : "movie"}</div>
     </div>`).join("");
   box.querySelectorAll(".item").forEach(el => {
@@ -271,13 +318,21 @@ async function runSearch(query) {
   const q = query.trim();
   if (q.length < 2) { renderResults(null); return; }
   const seq = ++searchSeq;
-  const data = await api("search/multi", { query: q });
-  if (seq !== searchSeq) return; // a newer keystroke superseded this one
-  const items = (data.results || [])
-    .filter(x => (x.media_type === "movie" || x.media_type === "tv"))
-    .filter(x => originFilter === "en" ? isForeign(x) : !isForeign(x))
-    .slice(0, 20);
-  renderResults(items);
+  const local = searchCatalog(q);           // instant, from our curated data
+  let tmdb = [];
+  try {
+    const data = await api("search/multi", { query: q });
+    if (seq !== searchSeq) return;           // a newer keystroke superseded this one
+    tmdb = (data.results || [])
+      .filter(x => (x.media_type === "movie" || x.media_type === "tv"))
+      .filter(x => originFilter === "en" ? isForeign(x) : !isForeign(x));
+  } catch (e) {
+    if (seq !== searchSeq) return;
+  }
+  // Catalog matches first; then TMDB titles not already covered by the catalog.
+  const seen = new Set(local.map(x => x.id));
+  const merged = [...local, ...tmdb.filter(x => !seen.has(x.id))].slice(0, 20);
+  renderResults(merged);
 }
 
 function debounce(fn, ms) {
@@ -316,6 +371,16 @@ svg = d3.select("svg");
 Promise.all([api("genre/movie/list"), api("genre/tv/list")]).then(([m, t]) => {
   [...(m.genres || []), ...(t.genres || [])].forEach(g => { genreMap[g.id] = g.name; });
 });
+// Load the curated catalog in the background so search can query it first.
+// Failure is non-fatal — the app falls back to live TMDB search alone.
+fetch("./docs/data.json")
+  .then(r => r.json())
+  .then(data => {
+    catalog = data.map(catalogToItem);
+    catalogById = Object.fromEntries(data.map(d => [d.id, d]));
+    catalogReady = true;
+  })
+  .catch(() => {});
 </script>
 </body>
 </html>
