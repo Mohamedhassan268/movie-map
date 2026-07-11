@@ -1,3 +1,14 @@
 __pycache__/
 *.pyc
 .claude/
+
+# Local secrets / environment — never commit
+.env
+.env.*
+!.env.example
+.vercel/
+
+# Regenerable pipeline build artifacts (commit only docs/data.json)
+scraper/output/egypt_movies*.json
+ai_tagging/output/egypt_movies*.json
+docs/data.old39.json

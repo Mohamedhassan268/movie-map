@@ -26,7 +26,26 @@ python scrape.py --listing country/eg --limit 20 --out output/sample.json
   scraper uses the `truststore` package to trust the OS certificate store
   instead of failing SSL verification.
 
-## TMDB enrichment (optional, supplements the scrape)
+## TMDB Discover scraper (bulk Egyptian catalog, preferred over Elcinema scrape for volume)
+
+```
+cd scraper
+python -m pip install -r requirements.txt
+python tmdb_discover.py --from-year 1930 --to-year 2026 --out output/egypt_movies.json
+```
+
+- Requires the same free TMDB API key as below: `export TMDB_API_KEY=...` (bash) /
+  `$env:TMDB_API_KEY = '...'` (PowerShell).
+- Pulls every movie TMDB has tagged with `with_origin_country=EG` from
+  `/discover/movie`, iterating year by year (avoids TMDB's ~500-page/10k-result
+  cap per query) and fetching both Arabic and English localizations per title.
+- Output already has `tmdb_id`, `tmdb_genres`, `tmdb_overview_en`,
+  `tmdb_original_language` populated — **skip the `tmdb_enrich.py` step** for
+  this output, it's redundant. `cast`/`director`/`tmdb_keywords` are left
+  `null` (not returned by discover; unused by the tagger/similarity steps).
+- Feed the output straight into AI tagging below.
+
+## TMDB enrichment (optional, supplements an Elcinema scrape)
 
 ```
 cd scraper
@@ -119,13 +138,19 @@ injects the TMDB key server-side (so the key is never in the page).
    build step). Leave build/output settings default.
 3. Under **Environment Variables**, add `TMDB_READ_TOKEN` = your TMDB v4 API
    Read Access Token (or `TMDB_API_KEY` = the v3 key). This is the secret —
-   it lives only in Vercel, never in the repo.
+   it lives only in Vercel, never in the repo. Optionally add `ALLOWED_ORIGIN`
+   = your deployed site URL (e.g. `https://movie-map.vercel.app`) to lock the
+   `/api/tmdb` proxy to your own site so strangers can't burn your TMDB quota;
+   leave it unset to allow all origins.
 4. Deploy. Vercel serves `index.html` at `/` and the function at
    `/api/tmdb`. Pushes to `master` auto-redeploy.
 
 ### Local dev
 `vercel dev` (after `npm i -g vercel` and `vercel link`) runs the static site
 + the function together with the env var loaded, at http://localhost:3000.
+Keep secrets in `.env.local` (gitignored — see `.env.example` for the list of
+vars); `vercel env pull .env.local` fetches them from the project. Never put a
+key in a tracked file.
 
 ### Behaviour
 - Landing: title, tagline, Arabic/English origin filter, one search box —

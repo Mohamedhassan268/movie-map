@@ -8,6 +8,8 @@
 // Set ONE of these as a Vercel environment variable (never commit it):
 //   TMDB_READ_TOKEN  - the v4 "API Read Access Token" (sent as a Bearer header)
 //   TMDB_API_KEY     - the v3 API key (sent as an api_key query param)
+// Optional:
+//   ALLOWED_ORIGIN   - lock the proxy to one site origin (e.g. https://foo.vercel.app)
 
 const TMDB_BASE = "https://api.themoviedb.org/3";
 
@@ -18,6 +20,28 @@ const ALLOWED = /^(search\/multi|genre\/(movie|tv)\/list|(movie|tv)\/\d+(\/(reco
 const PASS_PARAMS = ["query", "page", "append_to_response", "language"];
 
 module.exports = async function handler(req, res) {
+  if (req.method !== "GET") {
+    res.status(405).json({ error: "method not allowed" });
+    return;
+  }
+
+  // Optional origin lock: when ALLOWED_ORIGIN is set, only requests from that
+  // site pass, so a stranger who finds this URL can't burn the TMDB quota from
+  // a browser. Unset = allow all (keeps working before the deploy domain is
+  // known). Header-based, so it deters casual browser abuse but is spoofable by
+  // non-browser clients — a low-effort deterrent, not airtight; fine for the
+  // public TMDB data this serves.
+  const allowedOrigin = process.env.ALLOWED_ORIGIN;
+  if (allowedOrigin) {
+    const origin = (req.headers.origin || "").toString();
+    const referer = (req.headers.referer || "").toString();
+    if (origin !== allowedOrigin && !referer.startsWith(allowedOrigin)) {
+      res.status(403).json({ error: "forbidden" });
+      return;
+    }
+    res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
+  }
+
   const endpoint = (req.query.endpoint || "").toString();
   if (!ALLOWED.test(endpoint)) {
     res.status(400).json({ error: "endpoint not allowed" });
