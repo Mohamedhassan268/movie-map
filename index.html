@@ -22,6 +22,20 @@
     background-size: 60px 40px;
   }
 
+  /* Per-movie backdrop: sits above #wallpaper, below the graph. Cross-fades
+     in via opacity when a centered title has a TMDB backdrop image. */
+  #backdrop {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-size: cover; background-position: center;
+    opacity: 0; transition: opacity 0.6s ease, background-image 0.6s ease;
+    filter: blur(8px) brightness(0.35);
+  }
+  #backdrop.show { opacity: 1; }
+  #backdrop::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(160deg, rgba(13,15,20,0.55) 0%, rgba(13,15,20,0.75) 100%);
+  }
+
   /* Landing */
   #landing { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 20px; }
   #landing h1 { margin: 0; font-size: 30px; letter-spacing: 0.3px; text-align: center; }
@@ -45,14 +59,25 @@
   #search-results .msg { padding: 14px; color: var(--muted); font-size: 13px; text-align: center; }
 
   /* Map */
-  #toolbar { position: absolute; top: 10px; left: 10px; z-index: 10; display: none; gap: 8px; }
+  #toolbar { position: absolute; top: 10px; left: 10px; z-index: 10; display: none; gap: 8px; align-items: center; flex-wrap: wrap; max-width: calc(100vw - 20px); }
   #toolbar button { background: var(--panel); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
   #toolbar button:hover { background: #202533; }
   #toolbar button:disabled { opacity: 0.4; cursor: default; }
+  #toolbar button.active { background: var(--accent); border-color: #4a7ac0; }
+  #threshold-wrap { display: flex; align-items: center; gap: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 4px 12px; font-size: 12px; color: var(--muted); }
+  #threshold-wrap input[type="range"] { width: 100px; }
   #info { position: absolute; bottom: 10px; left: 10px; z-index: 10; max-width: 320px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 14px; display: none; }
   #info h2 { margin: 0 0 4px; font-size: 16px; }
   #info .meta { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  #info .sim-row { font-size: 12px; margin-bottom: 4px; }
+  #info .sim-row .pct { font-weight: 600; }
+  #info .rating { color: #e0b354; font-size: 12px; margin-bottom: 4px; }
+  #info .poster { width: 64px; border-radius: 4px; float: right; margin-left: 10px; }
   #info .tags span { display: inline-block; background: #232733; border-radius: 10px; padding: 2px 8px; margin: 2px; font-size: 11px; }
+  #info .tags span.why { background: #2a3550; }
+  #legend { position: absolute; top: 10px; right: 10px; z-index: 10; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 11px; color: var(--muted); display: none; }
+  #legend .bar { width: 140px; height: 10px; border-radius: 5px; margin: 4px 0; }
+  #legend .ends { display: flex; justify-content: space-between; }
   #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); z-index: 5; color: var(--muted); font-size: 14px; display: none; }
   svg { position: relative; z-index: 1; width: 100vw; height: 100vh; display: block; }
   text.label { fill: #ddd; font-size: 11px; pointer-events: none; }
@@ -63,6 +88,7 @@
 </head>
 <body>
 <div id="wallpaper"></div>
+<div id="backdrop"></div>
 
 <div id="landing">
   <h1>Arabic Movie &amp; Show Map</h1>
@@ -80,6 +106,17 @@
 <div id="toolbar">
   <button id="back" disabled>&larr; Back</button>
   <button id="new-search">New search</button>
+  <button id="color-toggle" class="active" title="Toggle node color between similarity and genre">Color: similarity</button>
+  <div id="threshold-wrap">
+    <span>Min similarity</span>
+    <input id="threshold" type="range" min="0" max="100" value="0" />
+    <span id="threshold-val">0%</span>
+  </div>
+</div>
+<div id="legend">
+  <div>Similarity to centered title</div>
+  <div class="bar" id="legend-bar"></div>
+  <div class="ends"><span id="legend-min">0%</span><span id="legend-max">100%</span></div>
 </div>
 <div id="info"></div>
 <div id="loading">Loading...</div>
@@ -100,6 +137,7 @@ const GENRE_COLORS = {
 let originFilter = "ar";
 let genreMap = {};          // id -> name, populated from TMDB genre lists
 let neighborCache = {};     // "type:id" -> neighbor nodes (avoid refetch on recenter)
+let detailsCache = {};      // "type:id" -> { backdrop_path, vote_average, keywords }
 let history = [];           // stack of centered items for the Back button
 let svg, simulation;
 
@@ -107,6 +145,13 @@ let svg, simulation;
 let catalog = [];           // adapted TMDB-shaped items
 let catalogById = {};       // string tmdb_id -> raw catalog record (for neighbors)
 let catalogReady = false;
+
+// Similarity map state
+let colorMode = "sim";      // "sim" | "genre"
+let simThreshold = 0;       // 0-100, hides neighbours below this %
+let simColor = () => "#888";
+let currentCenter = null;
+let currentNeighbors = [];  // full neighbour list (with _sim/_why), before threshold filtering
 
 function api(endpoint, params = {}) {
   const qs = new URLSearchParams({ endpoint, ...params });
@@ -135,20 +180,95 @@ function genreNames(x) {
 }
 
 function colorOf(x) {
+  if (colorMode === "sim" && x._sim != null) return simColor(x._sim);
   const g = (genreNames(x)[0] || "").toLowerCase();
   return GENRE_COLORS[g] || "#888";
 }
 
-function posterUrl(x) { return x.poster_path ? IMG_BASE + x.poster_path : ""; }
+function posterUrl(x, size) { return x.poster_path ? (size ? `https://image.tmdb.org/t/p/${size}` : IMG_BASE) + x.poster_path : ""; }
+
+// --- similarity model ---
+// Catalog neighbours carry a real precomputed score (similarity/compute_similarity.py);
+// everything else (a live-TMDB neighbour) gets a lighter client-side estimate so the
+// color/tooltip work everywhere.
+function genreJaccard(a, b) {
+  const ga = new Set(genreNames(a).map(g => g.toLowerCase()));
+  const gb = new Set(genreNames(b).map(g => g.toLowerCase()));
+  if (ga.size === 0 || gb.size === 0) return 0;
+  const shared = [...ga].filter(g => gb.has(g));
+  const union = new Set([...ga, ...gb]);
+  return shared.length / union.size;
+}
+function sharedMoodTags(a, b) {
+  const ta = (a._catalog && a._catalog.mood_tags && a._catalog.mood_tags.ai_suggested) || [];
+  const tb = (b._catalog && b._catalog.mood_tags && b._catalog.mood_tags.ai_suggested) || [];
+  if (!ta.length || !tb.length) return [];
+  const setB = new Set(tb);
+  return ta.filter(t => setB.has(t));
+}
+function eraProximity(a, b) {
+  const ya = +itemYear(a), yb = +itemYear(b);
+  if (!ya || !yb) return 0;
+  const diff = Math.abs(Math.floor(ya / 10) - Math.floor(yb / 10));
+  if (diff === 0) return 1;
+  if (diff === 1) return 0.5;
+  return 0;
+}
+// Attach `_sim` (0-1) and `_why` (breakdown) to a neighbour relative to center.
+function simBetween(center, neighbor) {
+  const sharedGenres = genreNames(center).filter(g =>
+    genreNames(neighbor).map(x => x.toLowerCase()).includes(g.toLowerCase()));
+  const mood = sharedMoodTags(center, neighbor);
+  const era = eraProximity(center, neighbor);
+  const precomputed = neighbor._score;
+  const score = precomputed != null
+    ? precomputed
+    : 0.7 * genreJaccard(center, neighbor) + 0.3 * era;
+  return {
+    score: Math.max(0, Math.min(1, score)),
+    why: {
+      genres: sharedGenres,
+      mood,
+      era: era === 1 ? "same era" : (era === 0.5 ? "nearby era" : null),
+    },
+  };
+}
 
 // --- info panel ---
-function renderInfo(x, keywords) {
+// opts: { keywords, rating } — both optional. Poster/rating fall back to
+// fields already present on TMDB-sourced items (search/recommendations/
+// similar results all carry poster_path + vote_average); opts.rating covers
+// the centered title, whose rating comes from the one fetchDetails() call.
+function renderInfo(x, opts) {
+  opts = opts || {};
   const genres = genreNames(x);
-  const kw = keywords || [];
+  const kw = opts.keywords || [];
+  const rating = x.vote_average != null ? x.vote_average : opts.rating;
+  const poster = posterUrl(x, "w185");
+  const isCenter = currentCenter && itemId(x) === itemId(currentCenter);
+
+  let simHtml = "";
+  if (!isCenter && x._sim != null) {
+    const pct = Math.round(x._sim * 100);
+    const why = x._why || {};
+    const chips = [
+      ...(why.genres || []).slice(0, 3),
+      ...(why.mood || []).slice(0, 3),
+      ...(why.era ? [why.era] : []),
+    ];
+    simHtml = `
+      <div class="sim-row">Similarity to <strong>${nativeTitle(currentCenter)}</strong>: <span class="pct">${pct}%</span></div>
+      ${chips.length ? `<div class="tags">${chips.map(c => `<span class="why">${c}</span>`).join("")}</div>` : ""}
+    `;
+  }
+
   document.getElementById("info").style.display = "block";
   document.getElementById("info").innerHTML = `
+    ${poster ? `<img class="poster" src="${poster}" alt="" />` : ""}
     <h2>${nativeTitle(x)}</h2>
     <div class="meta">${itemYear(x) || "?"} &middot; ${itemType(x) === "tv" ? "series" : "movie"} &middot; ${genres.join(", ") || "no genre data"}</div>
+    ${rating ? `<div class="rating">&#9733; ${(+rating).toFixed(1)}</div>` : ""}
+    ${simHtml}
     <div class="tags">${kw.slice(0, 6).map(t => `<span>${t}</span>`).join("")}</div>
   `;
 }
@@ -195,6 +315,49 @@ function drag() {
     .on("end", (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; });
 }
 
+// --- similarity-aware render (color scale, threshold filter, legend) ---
+function simDomain(neighbors) {
+  const vals = neighbors.map(n => n._sim).filter(v => v != null);
+  if (!vals.length) return [0, 1];
+  const min = Math.min(...vals), max = Math.max(...vals);
+  return min === max ? [Math.max(0, min - 0.1), Math.min(1, max + 0.1)] : [min, max];
+}
+
+function updateLegend(shown) {
+  const legend = document.getElementById("legend");
+  if (colorMode !== "sim" || !shown.length) { legend.style.display = "none"; return; }
+  legend.style.display = "block";
+  const [min, max] = simDomain(shown);
+  const stops = Array.from({ length: 8 }, (_, i) => simColor(min + (max - min) * i / 7));
+  document.getElementById("legend-bar").style.background = `linear-gradient(to right, ${stops.join(",")})`;
+  document.getElementById("legend-min").textContent = Math.round(min * 100) + "%";
+  document.getElementById("legend-max").textContent = Math.round(max * 100) + "%";
+}
+
+function updateBackdrop(path) {
+  const el = document.getElementById("backdrop");
+  if (path) {
+    el.style.backgroundImage = `url(https://image.tmdb.org/t/p/w1280${path})`;
+    el.classList.add("show");
+  } else {
+    el.classList.remove("show");
+  }
+}
+
+// Re-render the current center's graph — called after centering, and again
+// (without refetching) when the color mode or similarity threshold changes.
+function renderGraph(center, neighbors) {
+  currentCenter = center;
+  currentNeighbors = neighbors;
+  const shown = neighbors.filter(n => n._sim == null || n._sim * 100 >= simThreshold);
+  simColor = d3.scaleSequential(d3.interpolateViridis).domain(simDomain(shown.length ? shown : neighbors));
+  const centerId = itemId(center);
+  const nodes = [{ ...center, _id: centerId }, ...shown.map(n => ({ ...n, _id: itemId(n) }))];
+  const links = shown.map(n => ({ source: centerId, target: itemId(n) }));
+  draw(nodes, links, centerId);
+  updateLegend(shown);
+}
+
 // --- curated catalog (searched first; TMDB is the fallback) ---
 const CATALOG_IMG = "https://image.tmdb.org/t/p/w500";
 // Adapt a docs/data.json record into the same "item" shape the graph uses,
@@ -223,10 +386,15 @@ function searchCatalog(q) {
 }
 function catalogNeighbors(rec) {
   return (rec.neighbors || [])
-    .map(n => catalogById[n.id])
-    .filter(Boolean)
     .slice(0, 12)
-    .map(catalogToItem);
+    .map(n => {
+      const nrec = catalogById[n.id];
+      if (!nrec) return null;
+      const item = catalogToItem(nrec);
+      item._score = n.score;   // precomputed similarity (0-1) from compute_similarity.py
+      return item;
+    })
+    .filter(Boolean);
 }
 
 // --- data fetching ---
@@ -261,26 +429,44 @@ async function fetchNeighbors(item) {
   return neighbors;
 }
 
-async function fetchKeywords(item) {
-  const rec = item._catalog || (itemType(item) === "movie" && catalogById[String(item.id)]);
-  if (rec) return (rec.mood_tags && rec.mood_tags.ai_suggested) || [];
+// Full TMDB details for the centered title only (backdrop + rating + keywords
+// in one call, cached). Catalog titles have a real tmdb_id too, so this works
+// for them as well — it's how a catalog center gets its backdrop wallpaper.
+async function fetchDetails(item) {
+  const key = itemId(item);
+  if (detailsCache[key]) return detailsCache[key];
+  const type = itemType(item);
   try {
-    const type = itemType(item);
     const d = await api(`${type}/${item.id}`, { append_to_response: "keywords" });
     const kw = (d.keywords && (d.keywords.keywords || d.keywords.results)) || [];
-    return kw.map(k => k.name);
-  } catch (e) { return []; }
+    const details = {
+      backdrop_path: d.backdrop_path || null,
+      vote_average: d.vote_average || null,
+      keywords: kw.map(k => k.name),
+    };
+    detailsCache[key] = details;
+    return details;
+  } catch (e) {
+    return { backdrop_path: null, vote_average: null, keywords: [] };
+  }
 }
 
 async function centerOn(item, pushHistory) {
   document.getElementById("loading").style.display = "block";
   if (pushHistory) history.push(item);
-  const centerId = itemId(item);
-  const [neighbors, keywords] = await Promise.all([fetchNeighbors(item), fetchKeywords(item)]);
-  const nodes = [{ ...item, _id: centerId }, ...neighbors.map(n => ({ ...n, _id: itemId(n) }))];
-  const links = nodes.slice(1).map(n => ({ source: centerId, target: n._id }));
-  draw(nodes, links, centerId);
-  renderInfo(item, keywords);
+  const rec = item._catalog || (itemType(item) === "movie" && catalogById[String(item.id)]);
+  // fetchDetails always runs (for backdrop + rating); its `keywords` are only
+  // used when this isn't a catalog title (catalog titles show mood tags instead).
+  const [neighborsRaw, details] = await Promise.all([fetchNeighbors(item), fetchDetails(item)]);
+  const keywords = rec ? ((rec.mood_tags && rec.mood_tags.ai_suggested) || []) : details.keywords;
+  const neighbors = neighborsRaw.map(n => {
+    const { score, why } = simBetween(item, n);
+    return { ...n, _sim: score, _why: why };
+  });
+  renderGraph(item, neighbors);
+  renderInfo(item, { keywords, rating: details.vote_average });
+  updateBackdrop(details.backdrop_path);
+  window.history.replaceState(null, "", "?movie=" + encodeURIComponent(itemId(item)));
   document.getElementById("loading").style.display = "none";
   document.getElementById("back").disabled = history.length <= 1;
 }
@@ -343,8 +529,13 @@ function debounce(fn, ms) {
 document.getElementById("new-search").addEventListener("click", () => {
   document.getElementById("toolbar").style.display = "none";
   document.getElementById("info").style.display = "none";
+  document.getElementById("legend").style.display = "none";
   document.getElementById("landing").style.display = "flex";
+  document.getElementById("backdrop").classList.remove("show");
   svg.selectAll("*").remove();
+  currentCenter = null;
+  currentNeighbors = [];
+  window.history.replaceState(null, "", window.location.pathname);
   const box = document.getElementById("search-box");
   box.value = ""; renderResults(null); box.focus();
 });
@@ -353,6 +544,20 @@ document.getElementById("back").addEventListener("click", () => {
   if (history.length <= 1) return;
   history.pop();
   centerOn(history[history.length - 1], false);
+});
+
+document.getElementById("color-toggle").addEventListener("click", () => {
+  colorMode = colorMode === "sim" ? "genre" : "sim";
+  const btn = document.getElementById("color-toggle");
+  btn.textContent = "Color: " + (colorMode === "sim" ? "similarity" : "genre");
+  btn.classList.toggle("active", colorMode === "sim");
+  if (currentCenter) renderGraph(currentCenter, currentNeighbors);
+});
+
+document.getElementById("threshold").addEventListener("input", (e) => {
+  simThreshold = +e.target.value;
+  document.getElementById("threshold-val").textContent = simThreshold + "%";
+  if (currentCenter) renderGraph(currentCenter, currentNeighbors);
 });
 
 document.querySelectorAll("#origin-filter button").forEach(btn => {
@@ -373,7 +578,7 @@ Promise.all([api("genre/movie/list"), api("genre/tv/list")]).then(([m, t]) => {
 });
 // Load the curated catalog in the background so search can query it first.
 // Failure is non-fatal — the app falls back to live TMDB search alone.
-fetch("./docs/data.json")
+const catalogLoadPromise = fetch("./docs/data.json")
   .then(r => r.json())
   .then(data => {
     catalog = data.map(catalogToItem);
@@ -381,6 +586,28 @@ fetch("./docs/data.json")
     catalogReady = true;
   })
   .catch(() => {});
+
+// Shareable deep link: ?movie=<type>:<id> opens the map centered on that
+// title directly, skipping the landing page. centerOn() writes this param
+// via history.replaceState whenever a new title is centered.
+async function initFromUrl() {
+  const movie = new URLSearchParams(window.location.search).get("movie");
+  if (!movie) return;
+  const sep = movie.indexOf(":");
+  if (sep < 0) return;
+  const type = movie.slice(0, sep), idStr = movie.slice(sep + 1);
+  await catalogLoadPromise;
+  let item = (type === "movie" && catalogById[idStr]) ? catalogToItem(catalogById[idStr]) : null;
+  if (!item) {
+    try {
+      const d = await api(`${type}/${idStr}`);
+      if (!d || d.success === false) return;
+      item = { ...d, media_type: type };
+    } catch (e) { return; }
+  }
+  showMap(item);
+}
+initFromUrl();
 </script>
 </body>
 </html>
