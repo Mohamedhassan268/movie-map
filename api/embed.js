@@ -117,6 +117,11 @@ module.exports = async function handler(req, res) {
       });
       const data = await upstream.json();
       const embeddings = (data && data.embeddings) || [];
+      if (!embeddings.length) {
+        console.error("Gemini embed response:", JSON.stringify(data));
+        res.status(200).json({ vectors, _debug: data }); // TEMP: remove once diagnosed
+        return;
+      }
       const toStore = [];
       for (let i = 0; i < misses.length; i++) {
         const vec = (embeddings[i] && embeddings[i].values) || null;
