@@ -62,6 +62,18 @@ async function cacheSetMany(entries) {
 }
 
 module.exports = async function handler(req, res) {
+  // TEMP: GET ?debug=models lists available Gemini models for this API key, to
+  // diagnose a 404 "model not found" error. Remove once diagnosed.
+  if (req.method === "GET" && req.query.debug === "models") {
+    const apiKey = process.env.GEMINI_API_KEY;
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    const data = await r.json();
+    const embedModels = (data.models || []).filter(m =>
+      (m.supportedGenerationMethods || []).some(x => x.toLowerCase().includes("embed")));
+    res.status(200).json({ embedModels });
+    return;
+  }
+
   if (req.method !== "POST") {
     res.status(405).json({ error: "method not allowed" });
     return;
