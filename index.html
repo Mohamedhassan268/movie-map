@@ -28,12 +28,12 @@
     position: fixed; inset: 0; z-index: 0; pointer-events: none;
     background-size: cover; background-position: center;
     opacity: 0; transition: opacity 0.6s ease, background-image 0.6s ease;
-    filter: blur(8px) brightness(0.35);
+    filter: blur(2px) brightness(0.6);
   }
   #backdrop.show { opacity: 1; }
   #backdrop::after {
     content: ""; position: absolute; inset: 0;
-    background: linear-gradient(160deg, rgba(13,15,20,0.55) 0%, rgba(13,15,20,0.75) 100%);
+    background: linear-gradient(160deg, rgba(13,15,20,0.25) 0%, rgba(13,15,20,0.45) 100%);
   }
 
   /* Landing */
@@ -91,7 +91,7 @@
   #legend .ends { display: flex; justify-content: space-between; }
   #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); z-index: 5; color: var(--muted); font-size: 14px; display: none; }
   svg { position: relative; z-index: 1; width: 100vw; height: 100vh; display: block; }
-  text.label { fill: #ddd; font-size: 11px; pointer-events: none; }
+  text.label { fill: #ddd; font-size: 11px; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.6); }
   circle.node { stroke: #000; stroke-width: 1px; cursor: pointer; }
   circle.node.center { stroke: #fff; stroke-width: 2px; }
   line.link { stroke: #4a4f5c; stroke-opacity: 0.6; }
