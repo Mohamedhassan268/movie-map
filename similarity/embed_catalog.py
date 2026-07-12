@@ -23,6 +23,13 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
+import truststore
+
+# On Windows machines with antivirus TLS inspection (e.g. Avast), trust the
+# OS certificate store instead of failing SSL verification - see
+# scraper/scrape.py, which hits the same issue.
+truststore.inject_into_ssl()
+
 # gemini-embedding-001 is the stable model available on the free tier (a
 # ListModels check found text-embedding-004 isn't accessible to this key).
 # It also has no synchronous batch method - only embedContent - so titles
