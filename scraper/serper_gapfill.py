@@ -123,6 +123,8 @@ def build_gapfill_record(tmdb_id, ar_details, en_details):
     genres = [g["name"] for g in en_details.get("genres", [])] or None
     poster_path = en_details.get("poster_path") or ar_details.get("poster_path")
     poster_url = f"https://image.tmdb.org/t/p/w500{poster_path}" if poster_path else None
+    backdrop_path = en_details.get("backdrop_path") or ar_details.get("backdrop_path")
+    vote_average = en_details.get("vote_average") or ar_details.get("vote_average")
 
     return {
         "id": str(tmdb_id),
@@ -136,6 +138,8 @@ def build_gapfill_record(tmdb_id, ar_details, en_details):
         "director": None,
         "synopsis_ar": ar_details.get("overview") or None,
         "poster_url": poster_url,
+        "backdrop_path": backdrop_path,
+        "vote_average": vote_average or None,
         "elcinema_url": f"https://www.themoviedb.org/movie/{tmdb_id}",
         "mood_tags": {"ai_suggested": [], "approved": []},
         "scraped_at": date.today().isoformat(),

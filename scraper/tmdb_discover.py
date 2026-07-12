@@ -91,6 +91,8 @@ def build_record(tmdb_id, ar_result, en_result, genre_map):
 
     poster_path = en_result.get("poster_path") or ar_result.get("poster_path")
     poster_url = f"https://image.tmdb.org/t/p/w500{poster_path}" if poster_path else None
+    backdrop_path = en_result.get("backdrop_path") or ar_result.get("backdrop_path")
+    vote_average = en_result.get("vote_average") or ar_result.get("vote_average")
 
     return {
         "id": str(tmdb_id),
@@ -104,6 +106,8 @@ def build_record(tmdb_id, ar_result, en_result, genre_map):
         "director": None,
         "synopsis_ar": ar_result.get("overview") or None,
         "poster_url": poster_url,
+        "backdrop_path": backdrop_path,
+        "vote_average": vote_average or None,
         "elcinema_url": f"https://www.themoviedb.org/movie/{tmdb_id}",
         "mood_tags": {"ai_suggested": [], "approved": []},
         "scraped_at": date.today().isoformat(),

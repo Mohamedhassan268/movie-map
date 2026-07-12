@@ -59,13 +59,24 @@
   #search-results .msg { padding: 14px; color: var(--muted); font-size: 13px; text-align: center; }
 
   /* Map */
-  #toolbar { position: absolute; top: 10px; left: 10px; z-index: 10; display: none; gap: 8px; align-items: center; flex-wrap: wrap; max-width: calc(100vw - 20px); }
+  #toolbar { position: absolute; top: 10px; left: 10px; z-index: 10; display: none; flex-direction: column; gap: 8px; align-items: flex-start; }
+  .toolbar-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; max-width: calc(100vw - 20px); }
   #toolbar button { background: var(--panel); color: var(--text); border: 1px solid var(--border); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
   #toolbar button:hover { background: #202533; }
   #toolbar button:disabled { opacity: 0.4; cursor: default; }
   #toolbar button.active { background: var(--accent); border-color: #4a7ac0; }
   #threshold-wrap { display: flex; align-items: center; gap: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 4px 12px; font-size: 12px; color: var(--muted); }
   #threshold-wrap input[type="range"] { width: 100px; }
+  #filters { display: none; flex-direction: column; gap: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; max-width: min(640px, calc(100vw - 20px)); }
+  .filter-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .flabel { font-size: 11px; color: var(--muted); width: 46px; flex: none; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { background: rgba(255,255,255,0.04); color: var(--muted); border: 1px solid var(--border); padding: 3px 10px; border-radius: 14px; cursor: pointer; font-size: 11px; }
+  .chip:hover { background: #202533; }
+  .chip.active { background: var(--accent); color: #fff; border-color: #4a7ac0; }
+  #surprise { background: rgba(255,255,255,0.04); color: var(--muted); border: 1px solid var(--border); padding: 10px 20px; border-radius: 22px; cursor: pointer; font-size: 13px; margin-top: 4px; }
+  #surprise:hover:not(:disabled) { background: #202533; color: var(--text); }
+  #surprise:disabled { opacity: 0.4; cursor: default; }
   #info { position: absolute; bottom: 10px; left: 10px; z-index: 10; max-width: 320px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 14px; display: none; }
   #info h2 { margin: 0 0 4px; font-size: 16px; }
   #info .meta { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
@@ -101,16 +112,24 @@
     <input id="search-box" type="text" placeholder="Search titles..." autocomplete="off" />
     <div id="search-results"></div>
   </div>
+  <button id="surprise" disabled>&#127922; Surprise me</button>
 </div>
 
 <div id="toolbar">
-  <button id="back" disabled>&larr; Back</button>
-  <button id="new-search">New search</button>
-  <button id="color-toggle" class="active" title="Toggle node color between similarity and genre">Color: similarity</button>
-  <div id="threshold-wrap">
-    <span>Min similarity</span>
-    <input id="threshold" type="range" min="0" max="100" value="0" />
-    <span id="threshold-val">0%</span>
+  <div class="toolbar-row">
+    <button id="back" disabled>&larr; Back</button>
+    <button id="new-search">New search</button>
+    <button id="color-toggle" class="active" title="Toggle node color between similarity and genre">Color: similarity</button>
+    <div id="threshold-wrap">
+      <span>Min similarity</span>
+      <input id="threshold" type="range" min="0" max="100" value="0" />
+      <span id="threshold-val">0%</span>
+    </div>
+  </div>
+  <div id="filters">
+    <div class="filter-row"><span class="flabel">Genre</span><div id="genre-chips" class="chips"></div></div>
+    <div class="filter-row"><span class="flabel">Mood</span><div id="mood-chips" class="chips"></div></div>
+    <div class="filter-row"><span class="flabel">Decade</span><div id="decade-chips" class="chips"></div></div>
   </div>
 </div>
 <div id="legend">
@@ -152,6 +171,11 @@ let simThreshold = 0;       // 0-100, hides neighbours below this %
 let simColor = () => "#888";
 let currentCenter = null;
 let currentNeighbors = [];  // full neighbour list (with _sim/_why), before threshold filtering
+
+// Filter-chip state — reset whenever a new title is centered (see centerOn)
+let selectedGenres = new Set();
+let selectedMoods = new Set();
+let selectedDecades = new Set();
 
 function api(endpoint, params = {}) {
   const qs = new URLSearchParams({ endpoint, ...params });
@@ -235,15 +259,15 @@ function simBetween(center, neighbor) {
 }
 
 // --- info panel ---
-// opts: { keywords, rating } — both optional. Poster/rating fall back to
-// fields already present on TMDB-sourced items (search/recommendations/
-// similar results all carry poster_path + vote_average); opts.rating covers
-// the centered title, whose rating comes from the one fetchDetails() call.
+// opts: { keywords } — optional (only the centered title passes this; hover
+// on a neighbour renders without it). Poster/rating come straight off the
+// item itself — catalog items carry them from the enriched docs/data.json,
+// TMDB items carry them natively on search/recommendations/similar results.
 function renderInfo(x, opts) {
   opts = opts || {};
   const genres = genreNames(x);
   const kw = opts.keywords || [];
-  const rating = x.vote_average != null ? x.vote_average : opts.rating;
+  const rating = x.vote_average;
   const poster = posterUrl(x, "w185");
   const isCenter = currentCenter && itemId(x) === itemId(currentCenter);
 
@@ -291,7 +315,15 @@ function draw(nodes, links, centerId) {
     .attr("r", d => d._id === centerId ? 20 : 12)
     .attr("fill", colorOf)
     .on("click", (event, d) => { if (d._id !== centerId) centerOn(d, true); })
-    .on("mouseover", (event, d) => renderInfo(d))
+    .on("mouseover", (event, d) => {
+      renderInfo(d);
+      // Preview the hovered title's backdrop; fall back to the center's own
+      // (rather than blanking out) if this node has none.
+      updateBackdrop(d.backdrop_path || (currentCenter && currentCenter.backdrop_path) || null);
+    })
+    .on("mouseout", () => {
+      if (currentCenter) updateBackdrop(currentCenter.backdrop_path || null);
+    })
     .call(drag());
 
   const label = svg.append("g").selectAll("text").data(nodes).join("text")
@@ -344,18 +376,61 @@ function updateBackdrop(path) {
   }
 }
 
+// --- genre / mood / decade filter chips ---
+function neighborMoods(n) {
+  return (n._catalog && n._catalog.mood_tags && n._catalog.mood_tags.ai_suggested) || [];
+}
+function decadeOf(year) {
+  const y = +year;
+  return y ? `${Math.floor(y / 10) * 10}s` : null;
+}
+function passesChipFilters(n) {
+  if (selectedGenres.size && !genreNames(n).some(g => selectedGenres.has(g))) return false;
+  if (selectedMoods.size && !neighborMoods(n).some(m => selectedMoods.has(m))) return false;
+  if (selectedDecades.size && !selectedDecades.has(decadeOf(itemYear(n)))) return false;
+  return true;
+}
+function renderChipGroup(containerId, options, selectedSet) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = options.map(o =>
+    `<button class="chip${selectedSet.has(o) ? " active" : ""}" data-v="${o}">${o}</button>`
+  ).join("");
+  el.querySelectorAll(".chip").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const v = btn.dataset.v;
+      if (selectedSet.has(v)) selectedSet.delete(v); else selectedSet.add(v);
+      btn.classList.toggle("active");
+      if (currentCenter) renderGraph(currentCenter, currentNeighbors);
+    });
+  });
+}
+// Chip options come from the full neighbour set (not the filtered/shown one)
+// so options stay stable as filters and the threshold slider are adjusted.
+function renderFilterChips(neighbors) {
+  const genres = [...new Set(neighbors.flatMap(genreNames))].sort();
+  const moods = [...new Set(neighbors.flatMap(neighborMoods))].sort();
+  const decades = [...new Set(neighbors.map(n => decadeOf(itemYear(n))).filter(Boolean))].sort();
+  renderChipGroup("genre-chips", genres, selectedGenres);
+  renderChipGroup("mood-chips", moods, selectedMoods);
+  renderChipGroup("decade-chips", decades, selectedDecades);
+  document.getElementById("filters").style.display =
+    (genres.length || moods.length || decades.length) ? "flex" : "none";
+}
+
 // Re-render the current center's graph — called after centering, and again
-// (without refetching) when the color mode or similarity threshold changes.
+// (without refetching) when the color mode, threshold, or filter chips change.
 function renderGraph(center, neighbors) {
   currentCenter = center;
   currentNeighbors = neighbors;
-  const shown = neighbors.filter(n => n._sim == null || n._sim * 100 >= simThreshold);
+  const shown = neighbors.filter(n =>
+    (n._sim == null || n._sim * 100 >= simThreshold) && passesChipFilters(n));
   simColor = d3.scaleSequential(d3.interpolateViridis).domain(simDomain(shown.length ? shown : neighbors));
   const centerId = itemId(center);
   const nodes = [{ ...center, _id: centerId }, ...shown.map(n => ({ ...n, _id: itemId(n) }))];
   const links = shown.map(n => ({ source: centerId, target: itemId(n) }));
   draw(nodes, links, centerId);
   updateLegend(shown);
+  renderFilterChips(neighbors);
 }
 
 // --- curated catalog (searched first; TMDB is the fallback) ---
@@ -371,6 +446,8 @@ function catalogToItem(rec) {
     original_language: rec.tmdb_original_language || "ar",
     _genres: rec.genres || [],
     poster_path: rec.poster_url ? rec.poster_url.replace(CATALOG_IMG, "") : null,
+    backdrop_path: rec.backdrop_path || null,
+    vote_average: rec.vote_average || null,
     release_date: rec.year ? `${rec.year}-01-01` : "",
     _catalog: rec,
   };
@@ -429,9 +506,10 @@ async function fetchNeighbors(item) {
   return neighbors;
 }
 
-// Full TMDB details for the centered title only (backdrop + rating + keywords
-// in one call, cached). Catalog titles have a real tmdb_id too, so this works
-// for them as well — it's how a catalog center gets its backdrop wallpaper.
+// TMDB details for a non-catalog centered title, cached by id. Only its
+// `keywords` are actually used (centerOn already has backdrop/rating from the
+// item itself); backdrop_path/vote_average are returned too as a defensive
+// fallback in case a caller's item is missing them.
 async function fetchDetails(item) {
   const key = itemId(item);
   if (detailsCache[key]) return detailsCache[key];
@@ -455,17 +533,26 @@ async function centerOn(item, pushHistory) {
   document.getElementById("loading").style.display = "block";
   if (pushHistory) history.push(item);
   const rec = item._catalog || (itemType(item) === "movie" && catalogById[String(item.id)]);
-  // fetchDetails always runs (for backdrop + rating); its `keywords` are only
-  // used when this isn't a catalog title (catalog titles show mood tags instead).
-  const [neighborsRaw, details] = await Promise.all([fetchNeighbors(item), fetchDetails(item)]);
-  const keywords = rec ? ((rec.mood_tags && rec.mood_tags.ai_suggested) || []) : details.keywords;
+  selectedGenres.clear();
+  selectedMoods.clear();
+  selectedDecades.clear();
+  // Catalog titles carry backdrop_path/vote_average/mood tags already (from
+  // the enriched docs/data.json), so centering on one needs no network call
+  // at all beyond fetching its neighbours. Only a pure-TMDB title needs a
+  // details fetch, and only for its `keywords` (the rest — backdrop, rating —
+  // are already present on the raw TMDB item from search/recommendations).
+  const [neighborsRaw, keywords] = await Promise.all([
+    fetchNeighbors(item),
+    rec ? Promise.resolve((rec.mood_tags && rec.mood_tags.ai_suggested) || [])
+        : fetchDetails(item).then(d => d.keywords),
+  ]);
   const neighbors = neighborsRaw.map(n => {
     const { score, why } = simBetween(item, n);
     return { ...n, _sim: score, _why: why };
   });
   renderGraph(item, neighbors);
-  renderInfo(item, { keywords, rating: details.vote_average });
-  updateBackdrop(details.backdrop_path);
+  renderInfo(item, { keywords });
+  updateBackdrop(item.backdrop_path || null);
   window.history.replaceState(null, "", "?movie=" + encodeURIComponent(itemId(item)));
   document.getElementById("loading").style.display = "none";
   document.getElementById("back").disabled = history.length <= 1;
@@ -530,14 +617,24 @@ document.getElementById("new-search").addEventListener("click", () => {
   document.getElementById("toolbar").style.display = "none";
   document.getElementById("info").style.display = "none";
   document.getElementById("legend").style.display = "none";
+  document.getElementById("filters").style.display = "none";
   document.getElementById("landing").style.display = "flex";
   document.getElementById("backdrop").classList.remove("show");
   svg.selectAll("*").remove();
   currentCenter = null;
   currentNeighbors = [];
+  selectedGenres.clear();
+  selectedMoods.clear();
+  selectedDecades.clear();
   window.history.replaceState(null, "", window.location.pathname);
   const box = document.getElementById("search-box");
   box.value = ""; renderResults(null); box.focus();
+});
+
+document.getElementById("surprise").addEventListener("click", () => {
+  const pool = catalog.filter(x => originFilter === "en" ? isForeign(x) : !isForeign(x));
+  if (!pool.length) return;
+  showMap(pool[Math.floor(Math.random() * pool.length)]);
 });
 
 document.getElementById("back").addEventListener("click", () => {
@@ -584,6 +681,7 @@ const catalogLoadPromise = fetch("./docs/data.json")
     catalog = data.map(catalogToItem);
     catalogById = Object.fromEntries(data.map(d => [d.id, d]));
     catalogReady = true;
+    document.getElementById("surprise").disabled = false;
   })
   .catch(() => {});
 
