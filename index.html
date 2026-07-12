@@ -80,15 +80,19 @@
   #surprise { background: rgba(255,255,255,0.04); color: var(--muted); border: 1px solid var(--border); padding: 10px 20px; border-radius: 22px; cursor: pointer; font-size: 13px; margin-top: 4px; }
   #surprise:hover:not(:disabled) { background: #202533; color: var(--text); }
   #surprise:disabled { opacity: 0.4; cursor: default; }
-  #info { position: absolute; bottom: 10px; left: 10px; z-index: 10; max-width: 320px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 14px; display: none; }
+  #info { position: absolute; bottom: 10px; left: 10px; z-index: 10; width: 320px; max-width: calc(100vw - 20px); max-height: 45vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 14px; display: none; }
   #info h2 { margin: 0 0 4px; font-size: 16px; }
   #info .meta { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
-  #info .sim-row { font-size: 12px; margin-bottom: 4px; }
-  #info .sim-row .pct { font-weight: 600; }
-  #info .rating { color: #e0b354; font-size: 12px; margin-bottom: 4px; }
+  #info .rating { color: #e0b354; font-size: 12px; margin-bottom: 6px; }
+  #info .summary { font-size: 12.5px; line-height: 1.5; color: #cfd3da; margin-bottom: 6px; clear: both; }
+  #info .summary.muted { color: var(--muted); font-style: italic; }
   #info .poster { width: 64px; border-radius: 4px; float: right; margin-left: 10px; }
   #info .tags span { display: inline-block; background: #232733; border-radius: 10px; padding: 2px 8px; margin: 2px; font-size: 11px; }
-  #info .tags span.why { background: #2a3550; }
+  #tooltip { position: fixed; z-index: 30; max-width: 240px; background: rgba(23,26,34,0.97); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 13px; pointer-events: none; display: none; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
+  #tooltip .tt-title { font-weight: 600; margin-bottom: 2px; }
+  #tooltip .tt-sub { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+  #tooltip .tt-sub .pct { color: #8fb4e8; font-weight: 600; }
+  #tooltip .tags span { display: inline-block; background: #2a3550; border-radius: 10px; padding: 2px 8px; margin: 2px 2px 0 0; font-size: 11px; }
   #legend { position: absolute; top: 10px; right: 10px; z-index: 10; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 11px; color: var(--muted); display: none; }
   #legend .bar { width: 140px; height: 10px; border-radius: 5px; margin: 4px 0; }
   #legend .ends { display: flex; justify-content: space-between; }
@@ -128,7 +132,7 @@
       <input id="threshold" type="range" min="0" max="100" value="0" />
       <span id="threshold-val">0%</span>
     </div>
-    <button id="filters-toggle">Filters<span id="filters-badge"></span></button>
+    <button id="filters-toggle">Vibes<span id="filters-badge"></span></button>
   </div>
   <div id="filters">
     <div class="filter-row"><span class="flabel">Genre</span><div id="genre-chips" class="chips"></div></div>
@@ -142,6 +146,7 @@
   <div class="ends"><span id="legend-min">0%</span><span id="legend-max">100%</span></div>
 </div>
 <div id="info"></div>
+<div id="tooltip"></div>
 <div id="loading">Loading...</div>
 <svg></svg>
 
@@ -185,6 +190,14 @@ let filtersOpen = false;   // the chip panel stays collapsed until toggled open
 function api(endpoint, params = {}) {
   const qs = new URLSearchParams({ endpoint, ...params });
   return fetch(`/api/tmdb?${qs}`).then(r => r.json());
+}
+
+// Escape untrusted text before it goes into innerHTML. Movie titles, keywords
+// and overviews come from TMDB (community-editable) or our scraped data, so
+// they must never be treated as markup.
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 // --- item helpers (an "item" is a raw TMDB movie/tv object) ---
@@ -263,43 +276,63 @@ function simBetween(center, neighbor) {
   };
 }
 
-// --- info panel ---
-// opts: { keywords } — optional (only the centered title passes this; hover
-// on a neighbour renders without it). Poster/rating come straight off the
-// item itself — catalog items carry them from the enriched docs/data.json,
-// TMDB items carry them natively on search/recommendations/similar results.
-function renderInfo(x, opts) {
-  opts = opts || {};
+// English plot summary: catalog items keep it on the raw record; TMDB items
+// carry `overview` natively (English is TMDB's default response language).
+function overviewOf(x) {
+  if (x._catalog) return x._catalog.tmdb_overview_en || "";
+  return x.overview || "";
+}
+
+// --- centered-title detail panel (persistent, bottom-left) ---
+// Shows the full details of the currently centered title, including its
+// summary. It does NOT change on hover — hovering a neighbour shows a light
+// tooltip instead (see showTooltip), so a summary stays readable.
+function renderCenterInfo(x, keywords) {
   const genres = genreNames(x);
-  const kw = opts.keywords || [];
+  const kw = keywords || [];
   const rating = x.vote_average;
   const poster = posterUrl(x, "w185");
-  const isCenter = currentCenter && itemId(x) === itemId(currentCenter);
-
-  let simHtml = "";
-  if (!isCenter && x._sim != null) {
-    const pct = Math.round(x._sim * 100);
-    const why = x._why || {};
-    const chips = [
-      ...(why.genres || []).slice(0, 3),
-      ...(why.mood || []).slice(0, 3),
-      ...(why.era ? [why.era] : []),
-    ];
-    simHtml = `
-      <div class="sim-row">Similarity to <strong>${nativeTitle(currentCenter)}</strong>: <span class="pct">${pct}%</span></div>
-      ${chips.length ? `<div class="tags">${chips.map(c => `<span class="why">${c}</span>`).join("")}</div>` : ""}
-    `;
-  }
-
+  const summary = overviewOf(x);
   document.getElementById("info").style.display = "block";
   document.getElementById("info").innerHTML = `
-    ${poster ? `<img class="poster" src="${poster}" alt="" />` : ""}
-    <h2>${nativeTitle(x)}</h2>
-    <div class="meta">${itemYear(x) || "?"} &middot; ${itemType(x) === "tv" ? "series" : "movie"} &middot; ${genres.join(", ") || "no genre data"}</div>
+    ${poster ? `<img class="poster" src="${esc(poster)}" alt="" />` : ""}
+    <h2>${esc(nativeTitle(x))}</h2>
+    <div class="meta">${esc(itemYear(x) || "?")} &middot; ${itemType(x) === "tv" ? "series" : "movie"} &middot; ${esc(genres.join(", ") || "no genre data")}</div>
     ${rating ? `<div class="rating">&#9733; ${(+rating).toFixed(1)}</div>` : ""}
-    ${simHtml}
-    <div class="tags">${kw.slice(0, 6).map(t => `<span>${t}</span>`).join("")}</div>
+    ${summary ? `<div class="summary">${esc(summary)}</div>` : `<div class="summary muted">No summary available.</div>`}
+    <div class="tags">${kw.slice(0, 6).map(t => `<span>${esc(t)}</span>`).join("")}</div>
   `;
+}
+
+// --- hover tooltip (lightweight, follows the cursor) ---
+function showTooltip(event, d) {
+  const tip = document.getElementById("tooltip");
+  const pct = d._sim != null ? Math.round(d._sim * 100) : null;
+  const why = d._why || {};
+  const chips = [
+    ...(why.genres || []).slice(0, 3),
+    ...(why.mood || []).slice(0, 3),
+    ...(why.era ? [why.era] : []),
+  ];
+  tip.innerHTML = `
+    <div class="tt-title">${esc(nativeTitle(d))}</div>
+    <div class="tt-sub">${esc(itemYear(d) || "")}${pct != null ? ` &middot; <span class="pct">${pct}% similar</span>` : ""}</div>
+    ${chips.length ? `<div class="tags">${chips.map(c => `<span class="why">${esc(c)}</span>`).join("")}</div>` : ""}
+  `;
+  tip.style.display = "block";
+  moveTooltip(event);
+}
+function moveTooltip(event) {
+  const tip = document.getElementById("tooltip");
+  const pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = event.clientX + pad, y = event.clientY + pad;
+  if (x + w > window.innerWidth) x = event.clientX - w - pad;
+  if (y + h > window.innerHeight) y = event.clientY - h - pad;
+  tip.style.left = x + "px";
+  tip.style.top = y + "px";
+}
+function hideTooltip() {
+  document.getElementById("tooltip").style.display = "none";
 }
 
 // --- graph drawing (backend-agnostic) ---
@@ -321,12 +354,14 @@ function draw(nodes, links, centerId) {
     .attr("fill", colorOf)
     .on("click", (event, d) => { if (d._id !== centerId) centerOn(d, true); })
     .on("mouseover", (event, d) => {
-      renderInfo(d);
+      if (d._id !== centerId) showTooltip(event, d);
       // Preview the hovered title's backdrop; fall back to the center's own
       // (rather than blanking out) if this node has none.
       updateBackdrop(d.backdrop_path || (currentCenter && currentCenter.backdrop_path) || null);
     })
+    .on("mousemove", (event, d) => { if (d._id !== centerId) moveTooltip(event); })
     .on("mouseout", () => {
+      hideTooltip();
       if (currentCenter) updateBackdrop(currentCenter.backdrop_path || null);
     })
     .call(drag());
@@ -398,7 +433,7 @@ function passesChipFilters(n) {
 function renderChipGroup(containerId, options, selectedSet) {
   const el = document.getElementById(containerId);
   el.innerHTML = options.map(o =>
-    `<button class="chip${selectedSet.has(o) ? " active" : ""}" data-v="${o}">${o}</button>`
+    `<button class="chip${selectedSet.has(o) ? " active" : ""}" data-v="${esc(o)}">${esc(o)}</button>`
   ).join("");
   el.querySelectorAll(".chip").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -565,7 +600,8 @@ async function centerOn(item, pushHistory) {
     return { ...n, _sim: score, _why: why };
   });
   renderGraph(item, neighbors);
-  renderInfo(item, { keywords });
+  renderCenterInfo(item, keywords);
+  hideTooltip();
   updateBackdrop(item.backdrop_path || null);
   window.history.replaceState(null, "", "?movie=" + encodeURIComponent(itemId(item)));
   document.getElementById("loading").style.display = "none";
@@ -587,10 +623,10 @@ function renderResults(items) {
   if (items.length === 0) { box.innerHTML = `<div class="msg">No matches.</div>`; return; }
   box.innerHTML = items.map((x, i) => `
     <div class="item" data-i="${i}">
-      ${posterUrl(x) ? `<img src="${posterUrl(x)}" alt="" />` : `<img alt="" />`}
+      ${posterUrl(x) ? `<img src="${esc(posterUrl(x))}" alt="" />` : `<img alt="" />`}
       <div class="t">
-        <div class="name">${nativeTitle(x)}</div>
-        <div class="sub">${itemYear(x) || ""}</div>
+        <div class="name">${esc(nativeTitle(x))}</div>
+        <div class="sub">${esc(itemYear(x) || "")}</div>
       </div>
       ${x._catalog ? `<div class="badge" style="border-color:#4a7ac0;color:#8fb4e8">catalog</div>` : ``}
       <div class="badge">${itemType(x) === "tv" ? "series" : "movie"}</div>
