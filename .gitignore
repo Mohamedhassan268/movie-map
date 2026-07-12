@@ -12,3 +12,4 @@ __pycache__/
 scraper/output/egypt_movies*.json
 ai_tagging/output/egypt_movies*.json
 docs/data.old39.json
+similarity/.embeddings_cache.json

@@ -296,7 +296,7 @@ const AR_MOOD = {
   "historical epic": "ملحمة تاريخية", "religious & spiritual": "ديني وروحاني",
   "folklore & legend": "فلكلور وأسطورة",
 };
-const AR_MISC = { "same era": "نفس الحقبة", "nearby era": "حقبة قريبة" };
+const AR_MISC = { "same era": "نفس الحقبة", "nearby era": "حقبة قريبة", "similar plot": "حبكة مشابهة" };
 const AR_CATEGORY = { "Genre": "النوع", "Mood": "المزاج", "Decade": "العقد" };
 
 // summaryLang drives ONLY the summary text and Vibes chip/tooltip labels —
@@ -426,23 +426,106 @@ function catalogFullScore(a, b) {
   return 0.35 * genreJaccard(a, b) + 0.45 * moodJaccard(a, b) + 0.20 * eraProximity(a, b);
 }
 // Attach `_sim` (0-1) and `_why` (breakdown) to a neighbour relative to center.
+// `neighbor._semScore` (plot/theme cosine similarity, 0-1) is set beforehand
+// by attachSemanticScores() for live-TMDB neighbours that have no precomputed
+// catalog score - see below.
 function simBetween(center, neighbor) {
   const sharedGenres = genreNames(center).filter(g =>
     genreNames(neighbor).map(x => x.toLowerCase()).includes(g.toLowerCase()));
   const mood = sharedMoodTags(center, neighbor);
   const era = eraProximity(center, neighbor);
   const precomputed = neighbor._score;
-  const score = precomputed != null
-    ? precomputed
-    : 0.7 * genreJaccard(center, neighbor) + 0.3 * era;
+  const semantic = neighbor._semScore;
+  let score;
+  if (precomputed != null) {
+    score = precomputed;
+  } else if (semantic != null) {
+    score = 0.5 * semantic + 0.3 * genreJaccard(center, neighbor) + 0.2 * era;
+  } else {
+    score = 0.7 * genreJaccard(center, neighbor) + 0.3 * era;
+  }
   return {
     score: Math.max(0, Math.min(1, score)),
     why: {
       genres: sharedGenres,
       mood,
       era: era === 1 ? "same era" : (era === 0.5 ? "nearby era" : null),
+      plot: semantic != null && semantic >= 0.5 ? "similar plot" : null,
     },
   };
+}
+
+// --- semantic (plot/theme) similarity for live-TMDB neighbours ---
+// Catalog-vs-catalog scores already bake in an embeddings term (see
+// similarity/embed_catalog.py + compute_similarity.py). This covers a
+// centered title that ISN'T in the catalog: TMDB's recommendations/similar
+// candidates carry no mood tags and previously got no plot-aware signal at
+// all, just a genre+era estimate.
+const EMBED_BATCH_MAX = 20;
+
+function cosineSim(a, b) {
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  if (!na || !nb) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+// entries: [{key, text}] -> {key: vector|null}. Checks sessionStorage first
+// (per-browser cache) before calling /api/embed (which has its own shared
+// Vercel KV cache across all visitors) - see api/embed.js.
+async function fetchEmbeddings(entries) {
+  const vectors = {};
+  const misses = [];
+  for (const { key, text } of entries) {
+    const cached = sessionStorage.getItem(`embed:${key}`);
+    if (cached) vectors[key] = JSON.parse(cached);
+    else misses.push({ key, text });
+  }
+  for (let i = 0; i < misses.length; i += EMBED_BATCH_MAX) {
+    const batch = misses.slice(i, i + EMBED_BATCH_MAX);
+    try {
+      const r = await fetch("/api/embed", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ items: batch }),
+      });
+      const data = await r.json();
+      for (const { key } of batch) {
+        const vec = data.vectors && data.vectors[key];
+        vectors[key] = vec || null;
+        if (vec) sessionStorage.setItem(`embed:${key}`, JSON.stringify(vec));
+      }
+    } catch (e) {
+      for (const { key } of batch) vectors[key] = vectors[key] || null;
+    }
+  }
+  return vectors;
+}
+
+// Embeds the center + each neighbour's overview and attaches `_semScore`
+// (cosine similarity, 0-1) to each neighbour in place. Silently no-ops if
+// the center has no overview text or the embed call fails - simBetween()
+// falls back to its genre+era estimate either way.
+async function attachSemanticScores(center, neighbors) {
+  const centerText = (summaryOf(center, "en").text || "").trim();
+  if (!centerText) return;
+  const entries = [{ key: itemId(center), text: centerText }];
+  for (const n of neighbors) {
+    const text = (n.overview || "").trim();
+    if (text) entries.push({ key: itemId(n), text });
+  }
+  if (entries.length < 2) return;
+  const vectors = await fetchEmbeddings(entries);
+  const centerVec = vectors[itemId(center)];
+  if (!centerVec) return;
+  for (const n of neighbors) {
+    const vec = vectors[itemId(n)];
+    if (vec) n._semScore = cosineSim(centerVec, vec);
+  }
 }
 
 // Plot summary in the language the toggle is set to, with a fallback to
@@ -507,6 +590,7 @@ function showTooltip(event, d) {
     ...(why.genres || []).slice(0, 3),
     ...(why.mood || []).slice(0, 3),
     ...(why.era ? [why.era] : []),
+    ...(why.plot ? [why.plot] : []),
   ].map(tr);
   tip.innerHTML = `
     <div class="tt-title">${esc(nativeTitle(d))}</div>
@@ -826,6 +910,7 @@ async function centerOn(item, pushHistory) {
     rec ? Promise.resolve((rec.mood_tags && rec.mood_tags.ai_suggested) || [])
         : fetchDetails(item).then(d => d.keywords),
   ]);
+  if (!rec) await attachSemanticScores(item, neighborsRaw);
   const neighbors = neighborsRaw.map(n => {
     const { score, why } = simBetween(item, n);
     return { ...n, _sim: score, _why: why };

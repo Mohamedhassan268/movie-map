@@ -101,17 +101,40 @@ python tag_moods.py --in ../scraper/output/sample.tmdb.json --out output/sample.
 - Same input/output shape as the rule-based tagger — writes
   `mood_tags.ai_suggested`; `approved` stays empty until human review.
 
+## Plot/theme embeddings (semantic similarity signal)
+
+```
+cd similarity
+python -m pip install -r requirements.txt
+export GEMINI_API_KEY=...   # bash; $env:GEMINI_API_KEY = '...' for PowerShell
+python embed_catalog.py --in ../docs/data.json --cache .embeddings_cache.json
+```
+
+- Free-tier Google Gemini embedding API (`text-embedding-004`) — get a key at
+  aistudio.google.com/apikey.
+- Embeds each title's synopsis (`synopsis_ar` preferred, `tmdb_overview_en`
+  fallback) so similarity can be plot/theme-aware instead of relying only on
+  genre tags and a keyword-scanned mood tag.
+- Caches vectors to `.embeddings_cache.json` (gitignored, regenerable) keyed
+  by title id, so reruns after adding titles only embed the new ones.
+
 ## Similarity engine
 
 ```
 cd similarity
-python compute_similarity.py --in ../ai_tagging/output/sample.tagged.json ../ai_tagging/output/1995_sample.tagged.json --out ../docs/data.json --top-n 8
+python compute_similarity.py --in ../ai_tagging/output/sample.tagged.json ../ai_tagging/output/1995_sample.tagged.json --out ../docs/data.json --top-n 8 --embeddings .embeddings_cache.json
 ```
 
-- No API key, no cost — pure computation over the tagged records.
-- Weighted score per the spec's starting weights (genre overlap 35%, mood-tag
-  overlap 45%, era proximity 20%, all Jaccard-based) between every pair of
-  titles; keeps each title's top `--top-n` neighbors.
+- No API key, no cost — pure computation over the tagged records + cached
+  embeddings. Requires `numpy` (see `similarity/requirements.txt`) to
+  vectorize the ~4,500² pairwise semantic comparison.
+- Weighted score (semantic plot/theme 50%, genre overlap 25%, mood-tag
+  overlap 15%, era proximity 10%) between every pair of titles; keeps each
+  title's top `--top-n` neighbors. Weights renormalize over whichever
+  signals are actually available, so a title with no embedding still scores
+  sensibly on genre/mood/era alone.
+- `--embeddings` is optional — omit it to fall back to the old genre/mood/era
+  formula.
 - `--in` takes one or more tagged JSON files and merges them (dedup by `id`).
 - Output feeds `docs/index.html` directly — the frontend never recomputes
   similarity at request time.
@@ -130,20 +153,36 @@ injects the TMDB key server-side (so the key is never in the page).
   (search/genres/details/recommendations/similar) and reads the credential
   from an env var: `TMDB_READ_TOKEN` (v4 read token, preferred) or
   `TMDB_API_KEY` (v3 key).
+- `api/embed.js` — Vercel serverless function. Embeds plot/theme text via the
+  free-tier Gemini API (`GEMINI_API_KEY`) so live-TMDB "similar" candidates
+  (which carry no mood tags) can be re-ranked by plot similarity, not just
+  genre/era. Caches vectors in a Supabase (Postgres) table (`SUPABASE_URL`/
+  `SUPABASE_SERVICE_KEY`), shared across all visitors.
 
 ### Deploy on Vercel (one-time)
 1. Go to vercel.com, sign in with GitHub, "Add New → Project", import
    `Mohamedhassan268/movie-map`.
-2. Framework preset: **Other** (it's a static site + an API function; no
+2. Framework preset: **Other** (it's a static site + API functions; no
    build step). Leave build/output settings default.
 3. Under **Environment Variables**, add `TMDB_READ_TOKEN` = your TMDB v4 API
-   Read Access Token (or `TMDB_API_KEY` = the v3 key). This is the secret —
-   it lives only in Vercel, never in the repo. Optionally add `ALLOWED_ORIGIN`
-   = your deployed site URL (e.g. `https://movie-map.vercel.app`) to lock the
-   `/api/tmdb` proxy to your own site so strangers can't burn your TMDB quota;
-   leave it unset to allow all origins.
-4. Deploy. Vercel serves `index.html` at `/` and the function at
-   `/api/tmdb`. Pushes to `master` auto-redeploy.
+   Read Access Token (or `TMDB_API_KEY` = the v3 key), and `GEMINI_API_KEY` =
+   a free key from aistudio.google.com/apikey. These are secrets — they live
+   only in Vercel, never in the repo. Optionally add `ALLOWED_ORIGIN` = your
+   deployed site URL (e.g. `https://movie-map.vercel.app`) to lock the
+   `/api/tmdb` and `/api/embed` proxies to your own site so strangers can't
+   burn your API quota; leave it unset to allow all origins.
+4. Create a free Supabase project at supabase.com (no credit card required).
+   In its SQL editor, run:
+   ```sql
+   create table embeddings (key text primary key, vector jsonb not null);
+   ```
+   Then in Settings → API, copy the **Project URL** and the **service_role**
+   key into Vercel's Environment Variables as `SUPABASE_URL` and
+   `SUPABASE_SERVICE_KEY`. Skip this and `/api/embed` still works, just
+   without cross-visitor caching (every search re-embeds, burning through
+   the free Gemini quota faster).
+5. Deploy. Vercel serves `index.html` at `/` and the functions at
+   `/api/tmdb` and `/api/embed`. Pushes to `master` auto-redeploy.
 
 ### Local dev
 `vercel dev` (after `npm i -g vercel` and `vercel link`) runs the static site
