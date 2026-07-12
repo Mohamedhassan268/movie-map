@@ -74,6 +74,10 @@
   #threshold-wrap { display: flex; align-items: center; gap: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 4px 12px; font-size: 12px; color: var(--muted); }
   #threshold-wrap input[type="range"] { width: 100px; }
   #filters-toggle { position: relative; }
+  /* Desktop: everything lives directly in the toolbar row, so this menu
+     button/container is unused. Shown only in the mobile media query below. */
+  #controls-toggle { display: none; }
+  #controls-menu { display: none; }
   #filters-badge { display: none; }
   #filters-badge.show { display: inline-block; background: var(--accent); color: #fff; border-radius: 8px; font-size: 10px; padding: 0 5px; margin-left: 5px; }
   #filters { display: none; flex-direction: column; gap: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; max-width: min(420px, calc(100vw - 20px)); max-height: 240px; overflow-y: auto; }
@@ -87,6 +91,9 @@
   #surprise:hover:not(:disabled) { background: #202533; color: var(--text); }
   #surprise:disabled { opacity: 0.4; cursor: default; }
   #info { position: absolute; bottom: 10px; left: 10px; z-index: 10; width: 320px; max-width: calc(100vw - 20px); max-height: 45vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 14px; display: none; }
+  /* Drag handle for the mobile bottom-sheet layout only — desktop keeps the
+     plain card (head + body both always visible), so this stays hidden. */
+  #info .sheet-handle { display: none; }
   #info h2 { margin: 0 0 4px; font-size: 16px; }
   #info .meta { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
   #info .rating { color: #e0b354; font-size: 12px; margin-bottom: 6px; }
@@ -118,6 +125,73 @@
   circle.node { stroke: #000; stroke-width: 1px; cursor: pointer; }
   circle.node.center { stroke: #fff; stroke-width: 2px; }
   line.link { stroke: #4a4f5c; stroke-opacity: 0.6; }
+
+  /* ============ Mobile layout ============
+     Desktop (above) is untouched. Below 640px: the scattered corner-pinned
+     panels (color/threshold/vibes/language/legend) collapse into a single
+     "Controls" menu (reparented by JS — see applyControlsLayout), and the
+     detail panel becomes a bottom sheet that peeks instead of covering the
+     map. */
+  @media (max-width: 640px) {
+    #toolbar { left: 8px; right: 8px; top: max(10px, env(safe-area-inset-top)); }
+    .toolbar-row { max-width: 100%; }
+    #toolbar button { min-height: 40px; }
+
+    #controls-toggle { display: inline-flex; align-items: center; justify-content: center; font-size: 16px; }
+    #controls-menu {
+      flex-direction: column; gap: 10px;
+      position: fixed; top: calc(52px + env(safe-area-inset-top)); left: 8px; right: 8px; z-index: 24;
+      max-height: 70vh; overflow-y: auto;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px;
+    }
+    #controls-menu.open { display: flex; }
+    /* Un-pin the reparented panels (some are position:fixed/absolute in their
+       desktop rules) so they flow as normal full-width rows inside the menu.
+       Their own show/hide (inline `display`, JS-driven) is left alone. */
+    #controls-menu #lang-toggle,
+    #controls-menu #legend,
+    #controls-menu #filters-toggle,
+    #controls-menu #color-toggle,
+    #controls-menu #threshold-wrap,
+    #controls-menu #filters {
+      position: static; width: 100%; box-sizing: border-box; top: auto; left: auto; right: auto; bottom: auto;
+    }
+    #controls-menu #lang-toggle button { flex: 1; }
+    #controls-menu #threshold-wrap input[type="range"] { flex: 1; width: auto; }
+    /* color-toggle/filters-toggle were only styled via the ancestor-dependent
+       "#toolbar button" selector — once reparented out of #toolbar they'd
+       render as unstyled default buttons, so restyle them here by container
+       instead of by original ancestry. (lang-toggle/chip buttons already
+       have their own non-ancestor-dependent rules and are unaffected.) */
+    #controls-menu button {
+      background: var(--panel); color: var(--text); border: 1px solid var(--border);
+      padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; min-height: 40px;
+    }
+    #controls-menu button:hover { background: #202533; }
+    #controls-menu button.active { background: var(--accent); border-color: #4a7ac0; color: #fff; }
+    .chip { min-height: 32px; padding: 6px 12px; }
+
+    /* Detail panel -> bottom sheet: collapsed shows just the head (poster,
+       title, meta, rating) so the map stays visible; tap to expand for the
+       full summary. */
+    #info {
+      left: 0; right: 0; bottom: 0; top: auto; width: 100%; max-width: 100%;
+      max-height: 80vh; border-radius: 16px 16px 0 0;
+      padding: 8px 16px calc(10px + env(safe-area-inset-bottom));
+    }
+    #info .sheet-handle { display: block; width: 40px; height: 4px; background: var(--border); border-radius: 2px; margin: 0 auto 10px; cursor: pointer; }
+    #info .sheet-head { cursor: pointer; }
+    #info .sheet-body { display: none; }
+    #info.expanded .sheet-body { display: block; }
+    #info.expanded { max-height: 80vh; overflow-y: auto; }
+  }
+
+  /* Neighbour hover tooltip only makes sense with a mouse — touch has no
+     hover, so it would otherwise flash open on tap-and-hold with no way to
+     dismiss it cleanly. The detail sheet covers the centered title instead. */
+  @media (pointer: coarse) {
+    #tooltip { display: none !important; }
+  }
 </style>
 </head>
 <body>
@@ -154,6 +228,7 @@
       <span id="threshold-val">0%</span>
     </div>
     <button id="filters-toggle">Vibes<span id="filters-badge"></span></button>
+    <button id="controls-toggle" title="More controls">&#9881;</button>
   </div>
   <div id="filters">
     <div class="filter-row"><span class="flabel" id="flabel-genre">Genre</span><div id="genre-chips" class="chips"></div></div>
@@ -161,6 +236,10 @@
     <div class="filter-row"><span class="flabel" id="flabel-decade">Decade</span><div id="decade-chips" class="chips"></div></div>
   </div>
 </div>
+<!-- Mobile-only: color-toggle/threshold-wrap/filters-toggle/filters/lang-toggle/legend are
+     reparented here on narrow screens (see applyControlsLayout in the script), so the top
+     bar doesn't collide with itself on a phone. Restored to their original spots on desktop. -->
+<div id="controls-menu"></div>
 <div id="legend">
   <div>Similarity to centered title</div>
   <div class="bar" id="legend-bar"></div>
@@ -365,26 +444,39 @@ function summaryOf(x, lang) {
   return { text: "", lang: l };
 }
 
-// --- centered-title detail panel (persistent, bottom-left) ---
+// --- centered-title detail panel (persistent; a plain card on desktop, a
+// bottom sheet on mobile) ---
 // Shows the full details of the currently centered title, including its
 // summary. It does NOT change on hover — hovering a neighbour shows a light
 // tooltip instead (see showTooltip), so a summary stays readable.
+// Split into .sheet-head (poster/title/meta/rating, always visible) and
+// .sheet-body (summary/tags) — on mobile the body is collapsed by default
+// (peek) until tapped open (see #info.expanded in the mobile media query
+// and the click-delegation listener in the wiring section below); desktop
+// shows both, unaffected by the "expanded" class.
 function renderCenterInfo(x, keywords) {
   const genres = genreNames(x);
   const kw = keywords || [];
   const rating = x.vote_average;
   const poster = posterUrl(x, "w185");
   const summary = summaryOf(x);
-  document.getElementById("info").style.display = "block";
-  document.getElementById("info").innerHTML = `
-    ${poster ? `<img class="poster" src="${esc(poster)}" alt="" />` : ""}
-    <h2>${esc(nativeTitle(x))}</h2>
-    <div class="meta">${esc(itemYear(x) || "?")} &middot; ${itemType(x) === "tv" ? "series" : "movie"} &middot; ${esc(genres.join(", ") || "no genre data")}</div>
-    ${rating ? `<div class="rating">&#9733; ${(+rating).toFixed(1)}</div>` : ""}
-    ${summary.text
-      ? `<div class="summary" dir="${summary.lang === "ar" ? "rtl" : "ltr"}">${esc(summary.text)}</div>`
-      : `<div class="summary muted">${summaryLang === "ar" ? "لا يوجد ملخص متاح." : "No summary available."}</div>`}
-    <div class="tags">${kw.slice(0, 6).map(t => `<span>${esc(t)}</span>`).join("")}</div>
+  const info = document.getElementById("info");
+  info.classList.remove("expanded");
+  info.style.display = "block";
+  info.innerHTML = `
+    <div class="sheet-handle"></div>
+    <div class="sheet-head">
+      ${poster ? `<img class="poster" src="${esc(poster)}" alt="" />` : ""}
+      <h2>${esc(nativeTitle(x))}</h2>
+      <div class="meta">${esc(itemYear(x) || "?")} &middot; ${itemType(x) === "tv" ? "series" : "movie"} &middot; ${esc(genres.join(", ") || "no genre data")}</div>
+      ${rating ? `<div class="rating">&#9733; ${(+rating).toFixed(1)}</div>` : ""}
+    </div>
+    <div class="sheet-body">
+      ${summary.text
+        ? `<div class="summary" dir="${summary.lang === "ar" ? "rtl" : "ltr"}">${esc(summary.text)}</div>`
+        : `<div class="summary muted">${summaryLang === "ar" ? "لا يوجد ملخص متاح." : "No summary available."}</div>`}
+      <div class="tags">${kw.slice(0, 6).map(t => `<span>${esc(t)}</span>`).join("")}</div>
+    </div>
   `;
 }
 
@@ -833,6 +925,44 @@ function setSummaryLang(lang) {
 document.querySelectorAll("#lang-toggle button").forEach(btn => {
   btn.classList.toggle("active", btn.dataset.lang === summaryLang);
   btn.addEventListener("click", () => setSummaryLang(btn.dataset.lang));
+});
+
+// Mobile bottom sheet: tap the handle or the head to expand/collapse the
+// summary. Delegated (rather than bound per render) since #info's content
+// is replaced wholesale on every renderCenterInfo call.
+document.getElementById("info").addEventListener("click", (e) => {
+  if (e.target.closest(".sheet-handle") || e.target.closest(".sheet-head")) {
+    document.getElementById("info").classList.toggle("expanded");
+  }
+});
+
+// Mobile "Controls" menu: below 640px, reparent the scattered corner panels
+// (color/threshold/vibes/language/legend) into one #controls-menu so they
+// stop colliding; above 640px, restore each to its original spot so desktop
+// is unaffected. IDs, listeners and existing show/hide logic on these
+// elements are untouched by moving them — only their position in the DOM
+// (and thus in the mobile layout) changes.
+const CONTROLS_MENU_IDS = ["color-toggle", "threshold-wrap", "filters-toggle", "filters", "lang-toggle", "legend"];
+const controlsHome = new Map(); // id -> { parent, next } — original desktop location
+function applyControlsLayout(isMobile) {
+  const menu = document.getElementById("controls-menu");
+  CONTROLS_MENU_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (!controlsHome.has(id)) controlsHome.set(id, { parent: el.parentNode, next: el.nextSibling });
+    if (isMobile) {
+      if (el.parentNode !== menu) menu.appendChild(el);
+    } else {
+      const home = controlsHome.get(id);
+      if (el.parentNode !== home.parent) home.parent.insertBefore(el, home.next);
+    }
+  });
+}
+const mobileMQ = window.matchMedia("(max-width: 640px)");
+applyControlsLayout(mobileMQ.matches);
+mobileMQ.addEventListener("change", (e) => applyControlsLayout(e.matches));
+
+document.getElementById("controls-toggle").addEventListener("click", () => {
+  document.getElementById("controls-menu").classList.toggle("open");
 });
 
 document.getElementById("search-box").addEventListener("input", debounce(e => runSearch(e.target.value), 300));
