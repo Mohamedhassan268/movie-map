@@ -392,12 +392,21 @@ function genreJaccard(a, b) {
   const union = new Set([...ga, ...gb]);
   return shared.length / union.size;
 }
+function moodTagsOf(x) {
+  return (x._catalog && x._catalog.mood_tags && x._catalog.mood_tags.ai_suggested) || [];
+}
 function sharedMoodTags(a, b) {
-  const ta = (a._catalog && a._catalog.mood_tags && a._catalog.mood_tags.ai_suggested) || [];
-  const tb = (b._catalog && b._catalog.mood_tags && b._catalog.mood_tags.ai_suggested) || [];
+  const ta = moodTagsOf(a), tb = moodTagsOf(b);
   if (!ta.length || !tb.length) return [];
   const setB = new Set(tb);
   return ta.filter(t => setB.has(t));
+}
+function moodJaccard(a, b) {
+  const ma = new Set(moodTagsOf(a)), mb = new Set(moodTagsOf(b));
+  if (ma.size === 0 || mb.size === 0) return 0;
+  const shared = [...ma].filter(m => mb.has(m));
+  const union = new Set([...ma, ...mb]);
+  return shared.length / union.size;
 }
 function eraProximity(a, b) {
   const ya = +itemYear(a), yb = +itemYear(b);
@@ -406,6 +415,15 @@ function eraProximity(a, b) {
   if (diff === 0) return 1;
   if (diff === 1) return 0.5;
   return 0;
+}
+// Full weighted score (mirrors similarity/compute_similarity.py's genre 35% /
+// mood 45% / era 20%) for two catalog items that AREN'T each other's
+// precomputed neighbour. Used only to extend same-origin-language candidates
+// in catalogNeighbors() below — the plain client-side estimate in simBetween
+// (used for live-TMDB neighbours) omits mood entirely since TMDB items have
+// no mood tags, but both sides here are catalog items that do.
+function catalogFullScore(a, b) {
+  return 0.35 * genreJaccard(a, b) + 0.45 * moodJaccard(a, b) + 0.20 * eraProximity(a, b);
 }
 // Attach `_sim` (0-1) and `_why` (breakdown) to a neighbour relative to center.
 function simBetween(center, neighbor) {
@@ -690,9 +708,21 @@ function searchCatalog(q) {
     (x.original_title || "").includes(q)
   ).slice(0, 10);
 }
+// The precomputed top-8 (similarity/compute_similarity.py) is language-
+// agnostic, and ~96% of the catalog is Arabic-original, so a non-Arabic
+// title's precomputed neighbours are often entirely Arabic — e.g. one
+// EL-language film's real top-8 were 8/8 Arabic. To keep "similar movies"
+// meaningfully in the same language group as the center, prefer same-group
+// (foreign vs. Arabic-origin) neighbours: if the precomputed list doesn't
+// have enough, extend from the full catalog using the same weighted formula
+// the offline engine uses (genre/mood/era). Falls back to cross-group
+// neighbours only if the same-group pool still can't fill the slots.
+const NEIGHBOR_TARGET = 8, NEIGHBOR_CAP = 12;
 function catalogNeighbors(rec) {
-  return (rec.neighbors || [])
-    .slice(0, 12)
+  const centerItem = catalogToItem(rec);
+  const centerForeign = isForeign(centerItem);
+
+  const precomputed = (rec.neighbors || [])
     .map(n => {
       const nrec = catalogById[n.id];
       if (!nrec) return null;
@@ -701,6 +731,25 @@ function catalogNeighbors(rec) {
       return item;
     })
     .filter(Boolean);
+
+  const sameGroup = precomputed.filter(n => isForeign(n) === centerForeign);
+  const crossGroup = precomputed.filter(n => isForeign(n) !== centerForeign);
+
+  let result = sameGroup.slice(0, NEIGHBOR_TARGET);
+  if (result.length < NEIGHBOR_TARGET) {
+    const haveIds = new Set(result.map(n => n.id));
+    const extra = catalog
+      .filter(x => x.id !== centerItem.id && isForeign(x) === centerForeign && !haveIds.has(x.id))
+      .map(x => ({ item: x, score: catalogFullScore(centerItem, x) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, NEIGHBOR_TARGET - result.length)
+      .map(({ item, score }) => Object.assign({}, item, { _score: score }));
+    result = result.concat(extra);
+  }
+  if (result.length < NEIGHBOR_CAP) {
+    result = result.concat(crossGroup.slice(0, NEIGHBOR_CAP - result.length));
+  }
+  return result.slice(0, NEIGHBOR_CAP);
 }
 
 // --- data fetching ---
