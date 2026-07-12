@@ -7,7 +7,10 @@
 <script src="./vendor/d3.v7.min.js"></script>
 <style>
   :root { --bg: #0d0f14; --panel: #171a22; --border: #2a2f3a; --text: #e8e8ea; --muted: #8b909c; --accent: #3a5a8a; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; overflow: hidden; }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; }
+  /* The landing/search page scrolls normally (mobile-friendly); the map view
+     locks scroll to its own full-viewport SVG once a title is centered. */
+  body.map-open { overflow: hidden; height: 100%; }
 
   /* Subtle, non-flashy cinematic wallpaper: deep gradient + faint film-strip motif. */
   #wallpaper {
@@ -37,16 +40,19 @@
   }
 
   /* Landing */
-  #landing { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 20px; }
+  #landing { position: relative; z-index: 20; box-sizing: border-box; min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 16px; padding: 10vh 20px 40px; }
   #landing h1 { margin: 0; font-size: 30px; letter-spacing: 0.3px; text-align: center; }
   #landing p.sub { margin: 0; color: var(--muted); font-size: 14px; text-align: center; }
   #origin-filter { display: flex; gap: 8px; margin-top: 4px; }
   #origin-filter button { background: rgba(255,255,255,0.04); color: var(--muted); border: 1px solid var(--border); padding: 8px 18px; border-radius: 22px; cursor: pointer; font-size: 13px; }
   #origin-filter button.active { background: var(--accent); color: #fff; border-color: #4a7ac0; }
-  #search-wrap { position: relative; width: min(420px, 90vw); }
+  #search-wrap { width: min(420px, 90vw); }
   #search-box { width: 100%; box-sizing: border-box; padding: 12px 16px; border-radius: 10px; border: 1px solid var(--border); background: rgba(20,22,30,0.9); color: var(--text); font-size: 15px; }
   #search-box:focus { outline: none; border-color: var(--accent); }
-  #search-results { position: absolute; top: calc(100% + 6px); left: 0; right: 0; max-height: 340px; overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; display: none; }
+  /* In-flow (not an absolutely-positioned dropdown) so results push the page
+     taller and the whole page scrolls to reach them — no results were being
+     trapped inside a fixed-height, separately-scrolling box. */
+  #search-results { width: 100%; box-sizing: border-box; margin-top: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; display: none; }
   #search-results.show { display: block; }
   #search-results .item { display: flex; gap: 10px; align-items: center; padding: 8px 12px; cursor: pointer; border-bottom: 1px solid #21252e; }
   #search-results .item:last-child { border-bottom: none; }
@@ -93,11 +99,18 @@
   #tooltip .tt-sub { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
   #tooltip .tt-sub .pct { color: #8fb4e8; font-weight: 600; }
   #tooltip .tags span { display: inline-block; background: #2a3550; border-radius: 10px; padding: 2px 8px; margin: 2px 2px 0 0; font-size: 11px; }
-  #legend { position: absolute; top: 10px; right: 10px; z-index: 10; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 11px; color: var(--muted); display: none; }
+  #legend { position: absolute; top: 52px; right: 10px; z-index: 10; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 11px; color: var(--muted); display: none; }
   #legend .bar { width: 140px; height: 10px; border-radius: 5px; margin: 4px 0; }
   #legend .ends { display: flex; justify-content: space-between; }
+  #lang-toggle { position: fixed; top: 10px; right: 10px; z-index: 25; display: flex; gap: 6px; }
+  #lang-toggle button { background: rgba(255,255,255,0.04); color: var(--muted); border: 1px solid var(--border); padding: 6px 12px; border-radius: 16px; cursor: pointer; font-size: 12px; }
+  #lang-toggle button.active { background: var(--accent); color: #fff; border-color: #4a7ac0; }
   #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); z-index: 5; color: var(--muted); font-size: 14px; display: none; }
-  svg { position: relative; z-index: 1; width: 100vw; height: 100vh; display: block; }
+  /* Hidden until a title is centered (body.map-open) — otherwise its 100vh
+     box would sit in normal document flow below the landing content and add
+     a full viewport of blank scrollable space. */
+  svg { display: none; position: relative; z-index: 1; width: 100vw; height: 100vh; }
+  body.map-open svg { display: block; }
   text.label { fill: #ddd; font-size: 11px; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.6); }
   circle.node { stroke: #000; stroke-width: 1px; cursor: pointer; }
   circle.node.center { stroke: #fff; stroke-width: 2px; }
@@ -107,6 +120,11 @@
 <body>
 <div id="wallpaper"></div>
 <div id="backdrop"></div>
+
+<div id="lang-toggle">
+  <button data-lang="en" class="active">English</button>
+  <button data-lang="ar">العربية</button>
+</div>
 
 <div id="landing">
   <h1>Arabic Movie &amp; Show Map</h1>
@@ -135,9 +153,9 @@
     <button id="filters-toggle">Vibes<span id="filters-badge"></span></button>
   </div>
   <div id="filters">
-    <div class="filter-row"><span class="flabel">Genre</span><div id="genre-chips" class="chips"></div></div>
-    <div class="filter-row"><span class="flabel">Mood</span><div id="mood-chips" class="chips"></div></div>
-    <div class="filter-row"><span class="flabel">Decade</span><div id="decade-chips" class="chips"></div></div>
+    <div class="filter-row"><span class="flabel" id="flabel-genre">Genre</span><div id="genre-chips" class="chips"></div></div>
+    <div class="filter-row"><span class="flabel" id="flabel-mood">Mood</span><div id="mood-chips" class="chips"></div></div>
+    <div class="filter-row"><span class="flabel" id="flabel-decade">Decade</span><div id="decade-chips" class="chips"></div></div>
   </div>
 </div>
 <div id="legend">
@@ -162,6 +180,55 @@ const GENRE_COLORS = {
   "war & politics": "#6b6b6b", kids: "#6bb08a", reality: "#8b909c", soap: "#d16a9a",
 };
 
+// Arabic display names for Vibes chips (genre/mood/era) and category labels.
+// Titles are never translated — only these chip labels and the summary text
+// follow the language toggle (see summaryLang / tr()).
+const AR_GENRE = {
+  "Action": "أكشن", "Adventure": "مغامرة", "Animation": "رسوم متحركة",
+  "Comedy": "كوميديا", "Crime": "جريمة", "Documentary": "وثائقي", "Drama": "دراما",
+  "Family": "عائلي", "Fantasy": "خيال", "History": "تاريخي", "Horror": "رعب",
+  "Music": "موسيقى", "Mystery": "غموض", "Romance": "رومانسي",
+  "Science Fiction": "خيال علمي", "TV Movie": "فيلم تلفزيوني", "Thriller": "إثارة",
+  "War": "حرب", "Western": "وسترن", "Action & Adventure": "أكشن ومغامرة",
+  "Kids": "أطفال", "News": "أخبار", "Reality": "واقع",
+  "Sci-Fi & Fantasy": "خيال علمي وفانتازيا", "Soap": "مسلسل درامي", "Talk": "حواري",
+  "War & Politics": "حرب وسياسة",
+};
+const AR_MOOD = {
+  "family drama": "دراما عائلية", "family saga": "ملحمة عائلية",
+  "coming-of-age": "سن النضوج", "forbidden love": "حب ممنوع",
+  "marriage & betrayal": "زواج وخيانة", "friendship & loyalty": "صداقة ووفاء",
+  "generational conflict": "صراع الأجيال", "social commentary": "نقد اجتماعي",
+  "class conflict": "صراع طبقي", "poverty & survival": "فقر وبقاء",
+  "corruption": "فساد", "political intrigue": "دسائس سياسية",
+  "immigration & displacement": "هجرة ونزوح", "women's struggle": "كفاح المرأة",
+  "crime & heist": "جريمة وسرقة", "revenge": "انتقام",
+  "moral dilemma": "معضلة أخلاقية", "prison & captivity": "سجن وأسر",
+  "war & conflict": "حرب وصراع", "underdog": "الضعيف المنتصر",
+  "redemption": "خلاص", "tragedy": "مأساة", "nostalgia": "حنين",
+  "hope & resilience": "أمل وصمود", "despair & loss": "يأس وفقدان",
+  "triumph over adversity": "انتصار على الشدائد", "slapstick comedy": "كوميديا هزلية",
+  "satire": "سخرية", "feel-good": "مفرح", "comedy of errors": "كوميديا المفارقات",
+  "musical & celebration": "موسيقي واحتفالي", "mystery & suspense": "غموض وتشويق",
+  "supernatural & horror": "خارق للطبيعة ورعب", "psychological thriller": "إثارة نفسية",
+  "historical epic": "ملحمة تاريخية", "religious & spiritual": "ديني وروحاني",
+  "folklore & legend": "فلكلور وأسطورة",
+};
+const AR_MISC = { "same era": "نفس الحقبة", "nearby era": "حقبة قريبة" };
+const AR_CATEGORY = { "Genre": "النوع", "Mood": "المزاج", "Decade": "العقد" };
+
+// summaryLang drives ONLY the summary text and Vibes chip/tooltip labels —
+// movie titles always stay in their original language (nativeTitle) and the
+// separate Arabic/English origin filter is unaffected.
+let summaryLang = localStorage.getItem("summaryLang") === "ar" ? "ar" : "en";
+function tr(name) {
+  if (summaryLang !== "ar") return name;
+  return AR_GENRE[name] || AR_MOOD[name] || AR_MISC[name] || name;
+}
+function catLabel(en) {
+  return summaryLang === "ar" ? (AR_CATEGORY[en] || en) : en;
+}
+
 let originFilter = "ar";
 let genreMap = {};          // id -> name, populated from TMDB genre lists
 let neighborCache = {};     // "type:id" -> neighbor nodes (avoid refetch on recenter)
@@ -180,6 +247,8 @@ let simThreshold = 0;       // 0-100, hides neighbours below this %
 let simColor = () => "#888";
 let currentCenter = null;
 let currentNeighbors = [];  // full neighbour list (with _sim/_why), before threshold filtering
+let currentKeywords = [];   // the centered title's keywords/mood tags, so the language
+                             // toggle can re-render the detail panel without a refetch
 
 // Filter-chip state — reset whenever a new title is centered (see centerOn)
 let selectedGenres = new Set();
@@ -276,11 +345,21 @@ function simBetween(center, neighbor) {
   };
 }
 
-// English plot summary: catalog items keep it on the raw record; TMDB items
-// carry `overview` natively (English is TMDB's default response language).
-function overviewOf(x) {
-  if (x._catalog) return x._catalog.tmdb_overview_en || "";
-  return x.overview || "";
+// Plot summary in the language the toggle is set to, with a fallback to
+// whichever language actually has text. Catalog items carry both languages
+// (synopsis_ar / tmdb_overview_en) on the raw record; pure-TMDB items only
+// ever have an English overview (we never request TMDB in Arabic), so their
+// "ar" request transparently falls back to English. Titles are never
+// affected — only this summary follows summaryLang.
+function summaryOf(x, lang) {
+  const l = lang || summaryLang;
+  const ar = (x._catalog && x._catalog.synopsis_ar) || "";
+  const en = (x._catalog && x._catalog.tmdb_overview_en) || x.overview || "";
+  const primary = l === "ar" ? ar : en;
+  const fallback = l === "ar" ? en : ar;
+  if (primary) return { text: primary, lang: l };
+  if (fallback) return { text: fallback, lang: l === "ar" ? "en" : "ar" };
+  return { text: "", lang: l };
 }
 
 // --- centered-title detail panel (persistent, bottom-left) ---
@@ -292,14 +371,16 @@ function renderCenterInfo(x, keywords) {
   const kw = keywords || [];
   const rating = x.vote_average;
   const poster = posterUrl(x, "w185");
-  const summary = overviewOf(x);
+  const summary = summaryOf(x);
   document.getElementById("info").style.display = "block";
   document.getElementById("info").innerHTML = `
     ${poster ? `<img class="poster" src="${esc(poster)}" alt="" />` : ""}
     <h2>${esc(nativeTitle(x))}</h2>
     <div class="meta">${esc(itemYear(x) || "?")} &middot; ${itemType(x) === "tv" ? "series" : "movie"} &middot; ${esc(genres.join(", ") || "no genre data")}</div>
     ${rating ? `<div class="rating">&#9733; ${(+rating).toFixed(1)}</div>` : ""}
-    ${summary ? `<div class="summary">${esc(summary)}</div>` : `<div class="summary muted">No summary available.</div>`}
+    ${summary.text
+      ? `<div class="summary" dir="${summary.lang === "ar" ? "rtl" : "ltr"}">${esc(summary.text)}</div>`
+      : `<div class="summary muted">${summaryLang === "ar" ? "لا يوجد ملخص متاح." : "No summary available."}</div>`}
     <div class="tags">${kw.slice(0, 6).map(t => `<span>${esc(t)}</span>`).join("")}</div>
   `;
 }
@@ -313,7 +394,7 @@ function showTooltip(event, d) {
     ...(why.genres || []).slice(0, 3),
     ...(why.mood || []).slice(0, 3),
     ...(why.era ? [why.era] : []),
-  ];
+  ].map(tr);
   tip.innerHTML = `
     <div class="tt-title">${esc(nativeTitle(d))}</div>
     <div class="tt-sub">${esc(itemYear(d) || "")}${pct != null ? ` &middot; <span class="pct">${pct}% similar</span>` : ""}</div>
@@ -432,8 +513,11 @@ function passesChipFilters(n) {
 }
 function renderChipGroup(containerId, options, selectedSet) {
   const el = document.getElementById(containerId);
+  // data-v (and selectedSet) always hold the original English value, so
+  // filtering logic is unaffected by the language toggle — only the label
+  // shown to the user (tr(o)) changes.
   el.innerHTML = options.map(o =>
-    `<button class="chip${selectedSet.has(o) ? " active" : ""}" data-v="${esc(o)}">${esc(o)}</button>`
+    `<button class="chip${selectedSet.has(o) ? " active" : ""}" data-v="${esc(o)}">${esc(tr(o))}</button>`
   ).join("");
   el.querySelectorAll(".chip").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -455,6 +539,9 @@ function renderFilterChips(neighbors) {
   renderChipGroup("genre-chips", genres, selectedGenres);
   renderChipGroup("mood-chips", moods, selectedMoods);
   renderChipGroup("decade-chips", decades, selectedDecades);
+  document.getElementById("flabel-genre").textContent = catLabel("Genre");
+  document.getElementById("flabel-mood").textContent = catLabel("Mood");
+  document.getElementById("flabel-decade").textContent = catLabel("Decade");
   const hasOptions = genres.length || moods.length || decades.length;
   document.getElementById("filters-toggle").style.display = hasOptions ? "" : "none";
   document.getElementById("filters").style.display = (hasOptions && filtersOpen) ? "flex" : "none";
@@ -599,6 +686,7 @@ async function centerOn(item, pushHistory) {
     const { score, why } = simBetween(item, n);
     return { ...n, _sim: score, _why: why };
   });
+  currentKeywords = keywords;
   renderGraph(item, neighbors);
   renderCenterInfo(item, keywords);
   hideTooltip();
@@ -612,6 +700,7 @@ async function centerOn(item, pushHistory) {
 function showMap(item) {
   document.getElementById("landing").style.display = "none";
   document.getElementById("toolbar").style.display = "flex";
+  document.body.classList.add("map-open");
   history = [];
   centerOn(item, true);
 }
@@ -670,6 +759,8 @@ document.getElementById("new-search").addEventListener("click", () => {
   document.getElementById("filters").style.display = "none";
   document.getElementById("landing").style.display = "flex";
   document.getElementById("backdrop").classList.remove("show");
+  document.body.classList.remove("map-open");
+  window.scrollTo(0, 0);
   svg.selectAll("*").remove();
   currentCenter = null;
   currentNeighbors = [];
@@ -722,6 +813,23 @@ document.querySelectorAll("#origin-filter button").forEach(btn => {
     originFilter = btn.dataset.origin;
     runSearch(document.getElementById("search-box").value);
   });
+});
+
+// Site-wide summary/Vibes language toggle — separate from #origin-filter
+// above, which only controls which movies search returns. Titles never
+// change; only the summary text and Vibes chip/tooltip labels do.
+function setSummaryLang(lang) {
+  summaryLang = lang;
+  localStorage.setItem("summaryLang", lang);
+  document.querySelectorAll("#lang-toggle button").forEach(b => b.classList.toggle("active", b.dataset.lang === lang));
+  if (currentCenter) {
+    renderCenterInfo(currentCenter, currentKeywords);
+    renderFilterChips(currentNeighbors);
+  }
+}
+document.querySelectorAll("#lang-toggle button").forEach(btn => {
+  btn.classList.toggle("active", btn.dataset.lang === summaryLang);
+  btn.addEventListener("click", () => setSummaryLang(btn.dataset.lang));
 });
 
 document.getElementById("search-box").addEventListener("input", debounce(e => runSearch(e.target.value), 300));
