@@ -16,12 +16,15 @@ import json
 import os
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
-GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    "text-embedding-004:batchEmbedContents"
-)
+# gemini-embedding-001 is the stable model available on the free tier (a
+# ListModels check found text-embedding-004 isn't accessible to this key).
+# It also has no synchronous batch method - only embedContent - so titles
+# are embedded one call each, run concurrently.
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
 BATCH_SIZE = 90
+CONCURRENCY = 5
 OUTPUT_DIMENSIONALITY = 256
 
 
@@ -29,16 +32,10 @@ def text_of(record):
     return record.get("synopsis_ar") or record.get("tmdb_overview_en") or ""
 
 
-def embed_batch(api_key, texts):
+def embed_one(api_key, text):
     body = json.dumps({
-        "requests": [
-            {
-                "model": "models/text-embedding-004",
-                "content": {"parts": [{"text": t[:2000]}]},
-                "outputDimensionality": OUTPUT_DIMENSIONALITY,
-            }
-            for t in texts
-        ]
+        "content": {"parts": [{"text": text[:2000]}]},
+        "outputDimensionality": OUTPUT_DIMENSIONALITY,
     }).encode("utf-8")
     req = urllib.request.Request(
         f"{GEMINI_URL}?key={api_key}",
@@ -48,7 +45,12 @@ def embed_batch(api_key, texts):
     )
     with urllib.request.urlopen(req) as resp:
         data = json.load(resp)
-    return [e["values"] for e in data.get("embeddings", [])]
+    return data["embedding"]["values"]
+
+
+def embed_batch(api_key, texts):
+    with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
+        return list(pool.map(lambda t: embed_one(api_key, t), texts))
 
 
 def main():

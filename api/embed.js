@@ -19,8 +19,12 @@
 // Optional:
 //   ALLOWED_ORIGIN  - lock the proxy to one site origin (see api/tmdb.js)
 
+// gemini-embedding-001 is the stable model; this key's account doesn't have
+// access to text-embedding-004. It also has no synchronous batch method
+// (only embedContent/asyncBatchEmbedContent), so misses are embedded with
+// one embedContent call per text, run in parallel.
 const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents";
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent";
 const OUTPUT_DIMENSIONALITY = 256;
 const MAX_ITEMS = 20;
 
@@ -61,19 +65,24 @@ async function cacheSetMany(entries) {
   }
 }
 
-module.exports = async function handler(req, res) {
-  // TEMP: GET ?debug=models lists available Gemini models for this API key, to
-  // diagnose a 404 "model not found" error. Remove once diagnosed.
-  if (req.method === "GET" && req.query.debug === "models") {
-    const apiKey = process.env.GEMINI_API_KEY;
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
-    const data = await r.json();
-    const embedModels = (data.models || []).filter(m =>
-      (m.supportedGenerationMethods || []).some(x => x.toLowerCase().includes("embed")));
-    res.status(200).json({ embedModels });
-    return;
+async function embedOne(apiKey, text) {
+  try {
+    const upstream = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        content: { parts: [{ text: text.slice(0, 2000) }] },
+        outputDimensionality: OUTPUT_DIMENSIONALITY,
+      }),
+    });
+    const data = await upstream.json();
+    return (data && data.embedding && data.embedding.values) || null;
+  } catch (e) {
+    return null;
   }
+}
 
+module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "method not allowed" });
     return;
@@ -114,36 +123,13 @@ module.exports = async function handler(req, res) {
   }
 
   if (misses.length) {
-    try {
-      const body = {
-        requests: misses.map(({ text }) => ({
-          model: "models/text-embedding-004",
-          content: { parts: [{ text: text.slice(0, 2000) }] },
-          outputDimensionality: OUTPUT_DIMENSIONALITY,
-        })),
-      };
-      const upstream = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await upstream.json();
-      const embeddings = (data && data.embeddings) || [];
-      if (!embeddings.length) {
-        console.error("Gemini embed response:", JSON.stringify(data));
-        res.status(200).json({ vectors, _debug: data }); // TEMP: remove once diagnosed
-        return;
-      }
-      const toStore = [];
-      for (let i = 0; i < misses.length; i++) {
-        const vec = (embeddings[i] && embeddings[i].values) || null;
-        vectors[misses[i].key] = vec;
-        if (vec) toStore.push({ key: misses[i].key, vector: vec });
-      }
-      await cacheSetMany(toStore);
-    } catch (e) {
-      // Leave misses as null (already defaulted above) - caller falls back gracefully.
+    const results = await Promise.all(misses.map(({ text }) => embedOne(apiKey, text)));
+    const toStore = [];
+    for (let i = 0; i < misses.length; i++) {
+      vectors[misses[i].key] = results[i];
+      if (results[i]) toStore.push({ key: misses[i].key, vector: results[i] });
     }
+    await cacheSetMany(toStore);
   }
 
   res.status(200).json({ vectors });
