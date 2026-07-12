@@ -530,13 +530,14 @@ async function attachSemanticScores(center, neighbors) {
 
 // Plot summary in the language the toggle is set to, with a fallback to
 // whichever language actually has text. Catalog items carry both languages
-// (synopsis_ar / tmdb_overview_en) on the raw record; pure-TMDB items only
-// ever have an English overview (we never request TMDB in Arabic), so their
-// "ar" request transparently falls back to English. Titles are never
-// affected — only this summary follows summaryLang.
+// (synopsis_ar / tmdb_overview_en) on the raw record; pure-TMDB items get
+// their Arabic overview fetched on-demand (see fetchArabicOverview, called
+// from centerOn) and stashed on `_arOverview`, since TMDB requires a
+// separate request per locale. Titles are never affected — only this
+// summary follows summaryLang.
 function summaryOf(x, lang) {
   const l = lang || summaryLang;
-  const ar = (x._catalog && x._catalog.synopsis_ar) || "";
+  const ar = (x._catalog && x._catalog.synopsis_ar) || x._arOverview || "";
   const en = (x._catalog && x._catalog.tmdb_overview_en) || x.overview || "";
   const primary = l === "ar" ? ar : en;
   const fallback = l === "ar" ? en : ar;
@@ -891,6 +892,27 @@ async function fetchDetails(item) {
   }
 }
 
+// TMDB's Arabic-locale overview for a non-catalog centered title, cached by
+// id. TMDB returns localized fields (title/overview/tagline) for whichever
+// single `language` a request asks for, so getting an Arabic summary
+// requires this separate call from fetchDetails' (English) one. Empty
+// string is cached too (not every title has an Arabic translation on TMDB),
+// so a title with no Arabic overview isn't re-fetched every time it's
+// centered.
+const arOverviewCache = {};
+async function fetchArabicOverview(item) {
+  const key = itemId(item);
+  if (key in arOverviewCache) return arOverviewCache[key];
+  const type = itemType(item);
+  try {
+    const d = await api(`${type}/${item.id}`, { language: "ar" });
+    arOverviewCache[key] = d.overview || "";
+  } catch (e) {
+    arOverviewCache[key] = "";
+  }
+  return arOverviewCache[key];
+}
+
 async function centerOn(item, pushHistory) {
   document.getElementById("loading").style.display = "block";
   if (pushHistory) history.push(item);
@@ -905,11 +927,13 @@ async function centerOn(item, pushHistory) {
   // at all beyond fetching its neighbours. Only a pure-TMDB title needs a
   // details fetch, and only for its `keywords` (the rest — backdrop, rating —
   // are already present on the raw TMDB item from search/recommendations).
-  const [neighborsRaw, keywords] = await Promise.all([
+  const [neighborsRaw, keywords, arOverview] = await Promise.all([
     fetchNeighbors(item),
     rec ? Promise.resolve((rec.mood_tags && rec.mood_tags.ai_suggested) || [])
         : fetchDetails(item).then(d => d.keywords),
+    rec ? Promise.resolve(null) : fetchArabicOverview(item),
   ]);
+  if (!rec && arOverview) item._arOverview = arOverview;
   if (!rec) await attachSemanticScores(item, neighborsRaw);
   const neighbors = neighborsRaw.map(n => {
     const { score, why } = simBetween(item, n);
