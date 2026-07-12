@@ -9,12 +9,17 @@ similarity term alongside genre/mood/era.
 Usage:
     export GEMINI_API_KEY=...
     python embed_catalog.py --in ../docs/data.json --cache .embeddings_cache.json
+
+Safe to interrupt/rerun: the cache is written to disk after every batch (not
+just at the end), and rate-limit (429) errors are retried with backoff
+instead of killing the run.
 """
 
 import argparse
 import json
 import os
 import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
@@ -23,9 +28,10 @@ from concurrent.futures import ThreadPoolExecutor
 # It also has no synchronous batch method - only embedContent - so titles
 # are embedded one call each, run concurrently.
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
-BATCH_SIZE = 90
-CONCURRENCY = 5
+BATCH_SIZE = 40
+CONCURRENCY = 3
 OUTPUT_DIMENSIONALITY = 256
+MAX_RETRIES = 6
 
 
 def text_of(record):
@@ -43,9 +49,19 @@ def embed_one(api_key, text):
         headers={"content-type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req) as resp:
-        data = json.load(resp)
-    return data["embedding"]["values"]
+    delay = 5
+    for attempt in range(MAX_RETRIES):
+        try:
+            with urllib.request.urlopen(req) as resp:
+                data = json.load(resp)
+            return data["embedding"]["values"]
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < MAX_RETRIES - 1:
+                print(f"  rate limited, retrying in {delay}s...")
+                time.sleep(delay)
+                delay = min(delay * 2, 60)
+                continue
+            raise
 
 
 def embed_batch(api_key, texts):
@@ -84,11 +100,10 @@ def main():
         for (title_id, _), vec in zip(chunk, vectors):
             cache[title_id] = vec
         embedded += len(chunk)
-        print(f"Embedded {embedded}/{len(todo)}...")
-        time.sleep(1)  # stay well under the free-tier rate limit
-
-    with open(args.cachefile, "w", encoding="utf-8") as f:
-        json.dump(cache, f)
+        with open(args.cachefile, "w", encoding="utf-8") as f:
+            json.dump(cache, f)
+        print(f"Embedded {embedded}/{len(todo)}... (saved)")
+        time.sleep(2)  # stay well under the free-tier rate limit
 
     print(f"Cache now has {len(cache)} vectors ({embedded} newly embedded). "
           f"Wrote {args.cachefile}")
