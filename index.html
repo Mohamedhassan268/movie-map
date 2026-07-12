@@ -67,7 +67,10 @@
   #toolbar button.active { background: var(--accent); border-color: #4a7ac0; }
   #threshold-wrap { display: flex; align-items: center; gap: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 4px 12px; font-size: 12px; color: var(--muted); }
   #threshold-wrap input[type="range"] { width: 100px; }
-  #filters { display: none; flex-direction: column; gap: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; max-width: min(640px, calc(100vw - 20px)); }
+  #filters-toggle { position: relative; }
+  #filters-badge { display: none; }
+  #filters-badge.show { display: inline-block; background: var(--accent); color: #fff; border-radius: 8px; font-size: 10px; padding: 0 5px; margin-left: 5px; }
+  #filters { display: none; flex-direction: column; gap: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; max-width: min(420px, calc(100vw - 20px)); max-height: 240px; overflow-y: auto; }
   .filter-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .flabel { font-size: 11px; color: var(--muted); width: 46px; flex: none; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -125,6 +128,7 @@
       <input id="threshold" type="range" min="0" max="100" value="0" />
       <span id="threshold-val">0%</span>
     </div>
+    <button id="filters-toggle">Filters<span id="filters-badge"></span></button>
   </div>
   <div id="filters">
     <div class="filter-row"><span class="flabel">Genre</span><div id="genre-chips" class="chips"></div></div>
@@ -176,6 +180,7 @@ let currentNeighbors = [];  // full neighbour list (with _sim/_why), before thre
 let selectedGenres = new Set();
 let selectedMoods = new Set();
 let selectedDecades = new Set();
+let filtersOpen = false;   // the chip panel stays collapsed until toggled open
 
 function api(endpoint, params = {}) {
   const qs = new URLSearchParams({ endpoint, ...params });
@@ -406,6 +411,8 @@ function renderChipGroup(containerId, options, selectedSet) {
 }
 // Chip options come from the full neighbour set (not the filtered/shown one)
 // so options stay stable as filters and the threshold slider are adjusted.
+// The panel itself stays collapsed behind the "Filters" toggle button until
+// the user opens it — it only takes up screen space on request.
 function renderFilterChips(neighbors) {
   const genres = [...new Set(neighbors.flatMap(genreNames))].sort();
   const moods = [...new Set(neighbors.flatMap(neighborMoods))].sort();
@@ -413,8 +420,13 @@ function renderFilterChips(neighbors) {
   renderChipGroup("genre-chips", genres, selectedGenres);
   renderChipGroup("mood-chips", moods, selectedMoods);
   renderChipGroup("decade-chips", decades, selectedDecades);
-  document.getElementById("filters").style.display =
-    (genres.length || moods.length || decades.length) ? "flex" : "none";
+  const hasOptions = genres.length || moods.length || decades.length;
+  document.getElementById("filters-toggle").style.display = hasOptions ? "" : "none";
+  document.getElementById("filters").style.display = (hasOptions && filtersOpen) ? "flex" : "none";
+  const activeCount = selectedGenres.size + selectedMoods.size + selectedDecades.size;
+  const badge = document.getElementById("filters-badge");
+  badge.textContent = activeCount || "";
+  badge.classList.toggle("show", activeCount > 0);
 }
 
 // Re-render the current center's graph — called after centering, and again
@@ -536,6 +548,8 @@ async function centerOn(item, pushHistory) {
   selectedGenres.clear();
   selectedMoods.clear();
   selectedDecades.clear();
+  filtersOpen = false;
+  document.getElementById("filters-toggle").classList.remove("active");
   // Catalog titles carry backdrop_path/vote_average/mood tags already (from
   // the enriched docs/data.json), so centering on one needs no network call
   // at all beyond fetching its neighbours. Only a pure-TMDB title needs a
@@ -626,6 +640,8 @@ document.getElementById("new-search").addEventListener("click", () => {
   selectedGenres.clear();
   selectedMoods.clear();
   selectedDecades.clear();
+  filtersOpen = false;
+  document.getElementById("filters-toggle").classList.remove("active");
   window.history.replaceState(null, "", window.location.pathname);
   const box = document.getElementById("search-box");
   box.value = ""; renderResults(null); box.focus();
@@ -654,6 +670,12 @@ document.getElementById("color-toggle").addEventListener("click", () => {
 document.getElementById("threshold").addEventListener("input", (e) => {
   simThreshold = +e.target.value;
   document.getElementById("threshold-val").textContent = simThreshold + "%";
+  if (currentCenter) renderGraph(currentCenter, currentNeighbors);
+});
+
+document.getElementById("filters-toggle").addEventListener("click", () => {
+  filtersOpen = !filtersOpen;
+  document.getElementById("filters-toggle").classList.toggle("active", filtersOpen);
   if (currentCenter) renderGraph(currentCenter, currentNeighbors);
 });
 
